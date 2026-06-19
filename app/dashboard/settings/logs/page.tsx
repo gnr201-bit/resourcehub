@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { SyncLog } from '@/types/database.types';
-import { FileText, Search, Loader2, Calendar } from 'lucide-react';
+import { FileText, Search, Loader2, Calendar, Copy, Check } from 'lucide-react';
 
 export default function SyncLogsPage() {
   const supabase = createClient();
@@ -11,6 +11,14 @@ export default function SyncLogsPage() {
   const [logs, setLogs] = useState<SyncLog[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedStatus, setSelectedStatus] = useState('All');
+  const [selectedLog, setSelectedLog] = useState<SyncLog | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyDetails = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   const fetchLogs = async () => {
     setLoading(true);
@@ -112,7 +120,11 @@ export default function SyncLogsPage() {
                   else if (log.log_type === 'transfer_adjustment') logTypeKo = '부서이동 조정';
 
                   return (
-                    <tr key={log.id} className="hover:bg-gray-50/50 transition-colors">
+                    <tr 
+                      key={log.id} 
+                      onClick={() => setSelectedLog(log)}
+                      className="hover:bg-gray-50/50 transition-colors cursor-pointer"
+                    >
                       <td className="whitespace-nowrap px-6 py-4 text-xs font-mono text-gray-400">
                         {log.id.substring(0, 8)}...
                       </td>
@@ -152,6 +164,122 @@ export default function SyncLogsPage() {
           </table>
         </div>
       </div>
+
+      {/* 동기화 로그 상세 모달 */}
+      {selectedLog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl max-w-2xl w-full p-6 space-y-4 shadow-xl border border-gray-100 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex justify-between items-center border-b border-gray-100 pb-3">
+              <h3 className="text-lg font-bold text-[#020617] flex items-center gap-2">
+                <FileText className="text-[#00cfc1]" size={20} />
+                동기화 감사 로그 상세 내역
+              </h3>
+              <button 
+                onClick={() => {
+                  setSelectedLog(null);
+                  setCopied(false);
+                }} 
+                className="text-gray-400 hover:text-gray-600 text-sm font-semibold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4 text-xs">
+                <div className="bg-gray-50 p-3 rounded-lg border border-gray-100 space-y-1">
+                  <span className="text-gray-400 font-medium">로그 ID</span>
+                  <p className="font-mono text-[#020617] font-semibold truncate">{selectedLog.id}</p>
+                </div>
+                <div className="bg-gray-50 p-3 rounded-lg border border-gray-100 space-y-1">
+                  <span className="text-gray-400 font-medium">발생 시간</span>
+                  <p className="text-[#020617] font-semibold">{new Date(selectedLog.created_at).toLocaleString()}</p>
+                </div>
+                <div className="bg-gray-50 p-3 rounded-lg border border-gray-100 space-y-1">
+                  <span className="text-gray-400 font-medium">연동 구분</span>
+                  <p className="text-[#020617] font-semibold">
+                    {selectedLog.log_type === 'sync_hr' && 'HR 동기화'}
+                    {selectedLog.log_type === 'saas_provisioning' && 'SaaS 계정 배정'}
+                    {selectedLog.log_type === 'saas_deprovisioning' && 'SaaS 계정 회수'}
+                    {selectedLog.log_type === 'asset_assignment' && '자산 배정/회수'}
+                    {selectedLog.log_type === 'transfer_adjustment' && '부서이동 조정'}
+                    {!['sync_hr', 'saas_provisioning', 'saas_deprovisioning', 'asset_assignment', 'transfer_adjustment'].includes(selectedLog.log_type || '') && selectedLog.log_type}
+                  </p>
+                </div>
+                <div className="bg-gray-50 p-3 rounded-lg border border-gray-100 space-y-1">
+                  <span className="text-gray-400 font-medium">처리 상태</span>
+                  <div>
+                    <span className={`inline-block px-2.5 py-0.5 rounded text-[10px] font-bold ${
+                      selectedLog.status === 'success' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' :
+                      selectedLog.status === 'warning' ? 'bg-amber-50 text-amber-600 border border-amber-100' :
+                      'bg-red-50 text-red-600 border border-red-100'
+                    }`}>
+                      {selectedLog.status === 'success' && '성공'}
+                      {selectedLog.status === 'warning' && '경고'}
+                      {selectedLog.status === 'error' && '실패'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <span className="text-xs font-bold text-gray-600">이력 메시지</span>
+                <div className="p-3 bg-gray-50 rounded-lg border border-gray-100 text-sm text-[#020617] font-semibold leading-relaxed">
+                  {selectedLog.message}
+                </div>
+              </div>
+
+              {selectedLog.details && (
+                <div className="space-y-1">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-bold text-gray-600">상세 정보 (Details JSON)</span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyDetails(selectedLog.details || '')}
+                      className="text-xs text-[#00cfc1] hover:text-[#00a89a] font-bold flex items-center gap-1"
+                    >
+                      {copied ? (
+                        <>
+                          <Check size={12} />
+                          복사 완료!
+                        </>
+                      ) : (
+                        <>
+                          <Copy size={12} />
+                          클립보드 복사
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <pre className="p-3.5 bg-gray-900 text-emerald-400 text-xs font-mono rounded-lg overflow-auto max-h-48 whitespace-pre-wrap break-all">
+                    {(() => {
+                      try {
+                        const parsed = JSON.parse(selectedLog.details);
+                        return JSON.stringify(parsed, null, 2);
+                      } catch {
+                        return selectedLog.details;
+                      }
+                    })()}
+                  </pre>
+                </div>
+              )}
+
+              <div className="flex justify-end pt-3 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedLog(null);
+                    setCopied(false);
+                  }}
+                  className="px-5 py-2.5 bg-[#00cfc1] hover:bg-[#00a89a] text-[#020617] text-xs font-bold rounded-lg transition-colors"
+                >
+                  닫기
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

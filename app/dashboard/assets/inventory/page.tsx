@@ -33,6 +33,11 @@ export default function AssetInventoryPage() {
   const [selectedAssetStatus, setSelectedAssetStatus] = useState('unassigned');
   const [assetLocation, setAssetLocation] = useState('');
 
+  // Bulk upload state
+  const [isBulkUploadModalOpen, setIsBulkUploadModalOpen] = useState(false);
+  const [bulkAssets, setBulkAssets] = useState<any[]>([]);
+  const [bulkLoading, setBulkLoading] = useState(false);
+
   const fetchData = async () => {
     setLoading(true);
     try {
@@ -64,6 +69,120 @@ export default function AssetInventoryPage() {
   useEffect(() => {
     fetchData();
   }, []);
+
+  // CSV 템플릿 다운로드 기능
+  const downloadCSVSample = () => {
+    const headers = ['일련번호', '자산명', '카테고리', '상세사양', '구매가격', '제조사', '모델명', '보관위치'];
+    const sampleRow = ['SN-SAMPLE-01', 'MacBook Pro 14', '노트북', 'M3 / 16G / 512G', '2390000', 'Apple', 'A3112', 'IT자산고'];
+    // UTF-8 BOM to prevent Korean character corruption in Excel
+    const csvContent = '\uFEFF' + [headers.join(','), sampleRow.join(',')].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', 'IT_Asset_Bulk_Template.csv');
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // CSV 파일 업로드 및 파싱 핸들러
+  const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const text = event.target?.result as string;
+      if (!text) return;
+
+      const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
+      if (lines.length <= 1) {
+        alert('CSV 파일에 데이터가 존재하지 않습니다.');
+        return;
+      }
+
+      const newAssets: any[] = [];
+      for (let i = 1; i < lines.length; i++) {
+        // Simple comma split (could be enhanced, but fine for simple templates)
+        const currentLine = lines[i].split(',').map(val => val.trim());
+        if (currentLine.length < 2) continue;
+
+        const serial_number = currentLine[0];
+        const name = currentLine[1];
+        const category = currentLine[2] || '기타';
+        const spec = currentLine[3] || null;
+        const price = currentLine[4] ? parseFloat(currentLine[4]) : null;
+        const manufacturer = currentLine[5] || null;
+        const model_name = currentLine[6] || null;
+        const location = currentLine[7] || 'IT자산고';
+
+        if (!serial_number || !name) {
+          alert(`${i}번째 줄: 일련번호와 자산명은 필수 항목입니다.`);
+          return;
+        }
+
+        newAssets.push({
+          serial_number,
+          name,
+          category,
+          spec,
+          price,
+          manufacturer,
+          model_name,
+          status: 'unassigned',
+          location,
+          purchased_at: new Date().toISOString().split('T')[0]
+        });
+      }
+
+      if (newAssets.length === 0) {
+        alert('업로드할 유효한 자산 데이터가 없습니다.');
+        return;
+      }
+
+      setBulkAssets(newAssets);
+    };
+    reader.readAsText(file, 'utf-8');
+  };
+
+  // CSV 벌크 인서트 확정 승인 처리
+  const handleConfirmBulkUpload = async () => {
+    if (bulkAssets.length === 0) return;
+    setBulkLoading(true);
+    try {
+      const { error } = await supabase
+        .from('assets')
+        .insert(bulkAssets);
+
+      if (error) {
+        alert(`대량 등록 오류: ${error.message}`);
+        await supabase.from('sync_logs').insert({
+          log_type: 'asset_registration',
+          status: 'error',
+          message: `IT 자산 ${bulkAssets.length}대 대량 등록 실패`,
+          details: error.message
+        });
+      } else {
+        await supabase.from('sync_logs').insert({
+          log_type: 'asset_registration',
+          status: 'success',
+          message: `IT 자산 ${bulkAssets.length}대 대량 등록 성공`,
+          details: `등록된 S/N: ${bulkAssets.map(a => a.serial_number).join(', ')}`
+        });
+        alert(`성공적으로 ${bulkAssets.length}대의 자산이 일괄 등록되었습니다.`);
+        setIsBulkUploadModalOpen(false);
+        setBulkAssets([]);
+        await fetchData();
+      }
+    } catch (err) {
+      console.error('Bulk upload exception:', err);
+      alert('대량 등록 처리 중 오류가 발생했습니다.');
+    } finally {
+      setBulkLoading(false);
+    }
+  };
 
   const handleAddAsset = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -220,7 +339,14 @@ export default function AssetInventoryPage() {
           <h1 className="text-3xl font-bold text-[#020617] tracking-tight">IT 자산 재고 및 목록</h1>
           <p className="text-gray-500 mt-2 text-base">조직 내 하드웨어(노트북, 모니터 등)의 실시간 수량, 배정주체, 재고 현황을 통합 관리합니다.</p>
         </div>
-        <div>
+        <div className="flex gap-3">
+          <button
+            onClick={() => setIsBulkUploadModalOpen(true)}
+            className="px-5 py-3 border border-gray-200 hover:bg-gray-50 text-[#020617] font-bold rounded-lg transition-colors flex items-center gap-2 text-sm shadow-sm bg-white"
+          >
+            <Plus size={18} />
+            CSV 대량 등록
+          </button>
           <button
             onClick={() => setIsModalOpen(true)}
             className="px-5 py-3 bg-[#00cfc1] hover:bg-[#00a89a] text-[#020617] font-bold rounded-lg transition-colors flex items-center gap-2 text-sm shadow-sm"
@@ -561,6 +687,126 @@ export default function AssetInventoryPage() {
                 >
                   <Check size={14} />
                   저장
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CSV 대량 업로드 모달 */}
+      {isBulkUploadModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl max-w-2xl w-full p-6 space-y-5 shadow-xl border border-gray-100 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex justify-between items-center border-b border-gray-100 pb-3">
+              <h3 className="text-lg font-bold text-[#020617] flex items-center gap-2">
+                <Monitor className="text-[#00cfc1]" size={20} />
+                CSV 대량 IT 자산 등록
+              </h3>
+              <button 
+                onClick={() => {
+                  setIsBulkUploadModalOpen(false);
+                  setBulkAssets([]);
+                }} 
+                className="text-gray-400 hover:text-gray-600 text-sm font-semibold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-gray-50 rounded-xl border border-gray-100">
+                <div>
+                  <p className="text-xs font-bold text-gray-700">1. 대량 업로드 템플릿 다운로드</p>
+                  <p className="text-[11px] text-gray-400 mt-0.5">양식에 맞춰 자산 데이터를 기록한 뒤 업로드해야 에러가 발생하지 않습니다.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={downloadCSVSample}
+                  className="px-3.5 py-2 bg-[#020617] hover:bg-gray-800 text-white font-bold text-xs rounded-lg transition-colors shadow-sm"
+                >
+                  템플릿 다운로드
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                <p className="text-xs font-bold text-gray-700">2. CSV 파일 업로드</p>
+                <div className="border-2 border-dashed border-gray-200 rounded-xl p-6 text-center hover:border-[#00cfc1] transition-all relative">
+                  <input
+                    type="file"
+                    accept=".csv"
+                    onChange={handleCSVUpload}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  />
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold text-gray-600">CSV 파일을 드래그하거나 클릭하여 업로드</p>
+                    <p className="text-xs text-gray-400">지원 형식: UTF-8 인코딩의 CSV 파일 (*.csv)</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* 미리보기 영역 */}
+              {bulkAssets.length > 0 && (
+                <div className="space-y-2.5">
+                  <div className="flex justify-between items-center">
+                    <p className="text-xs font-bold text-gray-700">3. 업로드 데이터 미리보기 (총 {bulkAssets.length}건)</p>
+                    <span className="text-[10px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-full">
+                      정합성 검증 완료
+                    </span>
+                  </div>
+                  
+                  <div className="overflow-hidden rounded-xl border border-gray-150 max-h-48 overflow-y-auto">
+                    <table className="min-w-full divide-y divide-gray-150 text-left">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-4 py-2 text-xs font-bold text-gray-500">S/N</th>
+                          <th className="px-4 py-2 text-xs font-bold text-gray-500">자산명</th>
+                          <th className="px-4 py-2 text-xs font-bold text-gray-500">카테고리</th>
+                          <th className="px-4 py-2 text-xs font-bold text-gray-500">사양</th>
+                          <th className="px-4 py-2 text-xs font-bold text-gray-500">위치</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100 text-xs bg-white">
+                        {bulkAssets.slice(0, 5).map((asset, idx) => (
+                          <tr key={idx} className="hover:bg-gray-50/50">
+                            <td className="px-4 py-2 font-mono text-gray-600">{asset.serial_number}</td>
+                            <td className="px-4 py-2 font-semibold text-gray-800">{asset.name}</td>
+                            <td className="px-4 py-2 text-gray-500">{asset.category}</td>
+                            <td className="px-4 py-2 text-gray-400 truncate max-w-[120px]">{asset.spec || '-'}</td>
+                            <td className="px-4 py-2 text-gray-500">{asset.location}</td>
+                          </tr>
+                        ))}
+                        {bulkAssets.length > 5 && (
+                          <tr>
+                            <td colSpan={5} className="px-4 py-2 text-center text-gray-400 bg-gray-50/30">
+                              외 {bulkAssets.length - 5}건의 데이터가 더 존재합니다.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end space-x-2 pt-3 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsBulkUploadModalOpen(false);
+                    setBulkAssets([]);
+                  }}
+                  className="px-4 py-2 border border-gray-200 rounded-lg text-xs font-bold hover:bg-gray-50 text-gray-700 transition-colors"
+                >
+                  취소
+                </button>
+                <button
+                  type="button"
+                  disabled={bulkAssets.length === 0 || bulkLoading}
+                  onClick={handleConfirmBulkUpload}
+                  className="px-4 py-2 bg-[#00cfc1] hover:bg-[#00a89a] text-[#020617] text-xs font-bold rounded-lg transition-colors flex items-center gap-1 disabled:opacity-50"
+                >
+                  {bulkLoading ? '일괄 등록 중...' : `일괄 등록 완료 (${bulkAssets.length}건)`}
                 </button>
               </div>
             </div>
