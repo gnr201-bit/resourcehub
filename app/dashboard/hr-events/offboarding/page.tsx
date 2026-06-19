@@ -94,10 +94,32 @@ export default function OffboardingPage() {
         })
         .eq('id', assetId);
 
+      // 로그 기록
+      await supabase
+        .from('sync_logs')
+        .insert({
+          log_type: 'asset_recovery',
+          status: 'success',
+          message: `${selectedEmployee.name} 사원 자산 회수 완료 - [${assetName}]`,
+          details: `자산 ID: ${assetId}, 보관 장소: IT자산고`
+        });
+
       alert(`[${assetName}] 자산 회수 처리가 완료되었습니다.`);
       await fetchEmployeeResources(selectedEmployee.id);
     } catch (err) {
       console.error('Asset recovery error:', err);
+      try {
+        await supabase
+          .from('sync_logs')
+          .insert({
+            log_type: 'asset_recovery',
+            status: 'error',
+            message: `${selectedEmployee?.name || '임직원'} 사원 자산 [${assetName}] 회수 실패`,
+            details: err instanceof Error ? err.message : String(err)
+          });
+      } catch (logErr) {
+        console.error('Failed to log recovery error:', logErr);
+      }
       alert('자산 회수 중 오류가 발생했습니다.');
     } finally {
       setActionLoading(null);
@@ -126,10 +148,32 @@ export default function OffboardingPage() {
         })
         .eq('id', saasId);
 
+      // 로그 기록
+      await supabase
+        .from('sync_logs')
+        .insert({
+          log_type: 'saas_deprovisioning',
+          status: 'success',
+          message: `${selectedEmployee.name} 사원 SaaS 계정 회수 완료 - [${saasName}] (${selectedEmployee.email})`,
+          details: `SaaS ID: ${saasId}, 계정 어카운트 ID: ${accountId}`
+        });
+
       alert(`[${saasName}] 계정 비활성화 및 라이선스 회수가 완료되었습니다.`);
       await fetchEmployeeResources(selectedEmployee.id);
     } catch (err) {
       console.error('SaaS revoke error:', err);
+      try {
+        await supabase
+          .from('sync_logs')
+          .insert({
+            log_type: 'saas_deprovisioning',
+            status: 'error',
+            message: `${selectedEmployee?.name || '임직원'} 사원 SaaS [${saasName}] 회수 실패`,
+            details: err instanceof Error ? err.message : String(err)
+          });
+      } catch (logErr) {
+        console.error('Failed to log revoke error:', logErr);
+      }
       alert('SaaS 계정 회수 중 오류가 발생했습니다.');
     } finally {
       setActionLoading(null);
@@ -148,11 +192,33 @@ export default function OffboardingPage() {
         .eq('employee_id', selectedEmployee.id)
         .eq('event_type', 'offboarding');
 
+      // 로그 기록
+      await supabase
+        .from('sync_logs')
+        .insert({
+          log_type: 'offboarding_complete',
+          status: 'success',
+          message: `${selectedEmployee.name} 사원의 퇴사 자원 회수 절차 최종 종결`,
+          details: `임직원 ID: ${selectedEmployee.id}`
+        });
+
       alert(`${selectedEmployee.name} 사원의 퇴사 자원 회수 절차가 완전히 종결되었습니다.`);
       setSelectedEmployee(null);
       await fetchData();
     } catch (err) {
       console.error('Complete offboarding error:', err);
+      try {
+        await supabase
+          .from('sync_logs')
+          .insert({
+            log_type: 'offboarding_complete',
+            status: 'error',
+            message: `${selectedEmployee?.name || '임직원'} 사원의 퇴사 자원 회수 절차 최종 종결 중 오류 발생`,
+            details: err instanceof Error ? err.message : String(err)
+          });
+      } catch (logErr) {
+        console.error('Failed to log complete offboarding error:', logErr);
+      }
     } finally {
       setActionLoading(null);
     }

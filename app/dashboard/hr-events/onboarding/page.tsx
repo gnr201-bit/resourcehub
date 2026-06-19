@@ -132,12 +132,38 @@ export default function OnboardingPage() {
         .eq('employee_id', empId)
         .eq('event_type', 'onboarding');
 
+      // 5. 동기화 로그 기록
+      await supabase
+        .from('sync_logs')
+        .insert({
+          log_type: 'onboarding_approval',
+          status: 'success',
+          message: `${selectedEmployee.name} 사원의 자원 할당 및 입사 승인 완료 (부서: ${selectedEmployee.department})`,
+          details: JSON.stringify({
+            employee_id: empId,
+            assigned_asset: selectedAssetId || 'none',
+            assigned_saas_count: selectedSaasIds.length
+          })
+        });
+
       // 성공 메시지 및 데이터 새로고침
       alert(`${selectedEmployee.name} 사원의 자원 할당 및 입사 승인이 완료되었습니다.`);
       setSelectedEmployee(null);
       await fetchData();
     } catch (err) {
       console.error('Onboarding approval error:', err);
+      try {
+        await supabase
+          .from('sync_logs')
+          .insert({
+            log_type: 'onboarding_approval',
+            status: 'error',
+            message: `${selectedEmployee?.name || '임직원'} 사원의 입사 승인 중 오류 발생`,
+            details: err instanceof Error ? err.message : String(err)
+          });
+      } catch (logErr) {
+        console.error('Failed to write error log:', logErr);
+      }
       alert('승인 처리 중 오류가 발생했습니다.');
     } finally {
       setActionLoading(null);

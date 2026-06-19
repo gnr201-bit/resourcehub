@@ -90,7 +90,31 @@ export default function AssetInventoryPage() {
 
       if (error) {
         alert(`자산 추가 오류: ${error.message}`);
+        try {
+          await supabase
+            .from('sync_logs')
+            .insert({
+              log_type: 'asset_registration',
+              status: 'error',
+              message: `신규 자산 [${name}] 등록 실패 (S/N: ${serialNumber})`,
+              details: error.message
+            });
+        } catch (logErr) {
+          console.error('Failed to log asset registration error:', logErr);
+        }
       } else {
+        try {
+          await supabase
+            .from('sync_logs')
+            .insert({
+              log_type: 'asset_registration',
+              status: 'success',
+              message: `신규 자산 [${name}] 등록 완료 (S/N: ${serialNumber})`,
+              details: `카테고리: ${category}, 보관 위치: ${location}, 제조사: ${manufacturer || '-'}`
+            });
+        } catch (logErr) {
+          console.error('Failed to log asset registration success:', logErr);
+        }
         alert('신규 자산이 정상 등록되었습니다.');
         setIsModalOpen(false);
         // 폼 리셋
