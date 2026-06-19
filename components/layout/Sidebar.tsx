@@ -62,6 +62,7 @@ const MENU_ITEMS = [
     path: '/dashboard/settings',
     subItems: [
       { name: 'HR 시스템 연동', path: '/dashboard/settings/hr-sync' },
+      { name: '자원 템플릿 설정', path: '/dashboard/settings/templates' },
       { name: '동기화 로그 및 알림', path: '/dashboard/settings/logs' },
       { name: '경고 및 알림 규칙 설정', path: '/dashboard/settings/rules' },
     ]

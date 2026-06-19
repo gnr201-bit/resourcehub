@@ -1,0 +1,14 @@
+{
+  "IT팀": {
+    "default_asset_keyword": "MacBook",
+    "default_saas_names": ["Slack", "Jira", "IntelliJ"]
+  },
+  "디자인팀": {
+    "default_asset_keyword": "MacBook",
+    "default_saas_names": ["Slack", "Figma"]
+  },
+  "경영지원팀": {
+    "default_asset_keyword": "그램",
+    "default_saas_names": ["Slack", "Microsoft 365"]
+  }
+}

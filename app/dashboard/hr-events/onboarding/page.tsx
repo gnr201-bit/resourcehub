@@ -17,12 +17,14 @@ export default function OnboardingPage() {
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [selectedAssetId, setSelectedAssetId] = useState<string>('');
   const [selectedSaasIds, setSelectedSaasIds] = useState<string[]>([]);
+  const [templates, setTemplates] = useState<Record<string, { default_asset_keyword: string; default_saas_names: string[] }>>({});
+  const [templateApplied, setTemplateApplied] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      // 3개의 쿼리를 병렬로 실행하여 패치 속도를 개선합니다.
-      const [empResult, assetResult, saasResult] = await Promise.all([
+      // 4개의 비동기 처리를 병렬로 실행하여 패치 속도를 개선합니다.
+      const [empResult, assetResult, saasResult, templateResponse] = await Promise.all([
         supabase
           .from('employees')
           .select('*')
@@ -34,7 +36,8 @@ export default function OnboardingPage() {
           .eq('status', 'unassigned'),
         supabase
           .from('saas_services')
-          .select('*')
+          .select('*'),
+        fetch('/api/templates')
       ]);
 
       const empData = empResult.data;
@@ -44,6 +47,11 @@ export default function OnboardingPage() {
       setEmployees(empData || []);
       setUnassignedAssets(assetData || []);
       setSaasServices(saasData || []);
+
+      if (templateResponse.ok) {
+        const templateData = await templateResponse.json();
+        setTemplates(templateData);
+      }
       
       if (empData && empData.length > 0 && !selectedEmployee) {
         setSelectedEmployee(empData[0]);
@@ -61,14 +69,49 @@ export default function OnboardingPage() {
     fetchData();
   }, []);
 
-  // Set default asset and SaaS when selected employee changes
+  // Set default asset and SaaS when selected employee changes (Template dynamic mapping)
   useEffect(() => {
     if (selectedEmployee) {
-      setSelectedAssetId('');
-      // 기본적으로 모든 SaaS 서비스 선택
-      setSelectedSaasIds(saasServices.map(s => s.id));
+      const dept = selectedEmployee.department;
+      const template = templates[dept];
+
+      if (template) {
+        // 1. SaaS 매핑: 템플릿에 명시된 saas_names와 매칭되는 saas 서비스들의 id를 찾아서 세팅
+        const defaultSaasNames = template.default_saas_names || [];
+        const mappedSaasIds = saasServices
+          .filter(s => defaultSaasNames.includes(s.name))
+          .map(s => s.id);
+        
+        setSelectedSaasIds(mappedSaasIds);
+
+        // 2. IT 자산 매핑: 템플릿에 명시된 default_asset_keyword를 포함하는 자산 탐색
+        const keyword = template.default_asset_keyword?.toLowerCase();
+        if (keyword) {
+          const matchedAsset = unassignedAssets.find(asset => 
+            asset.name?.toLowerCase().includes(keyword) || 
+            asset.manufacturer?.toLowerCase().includes(keyword) ||
+            asset.model_name?.toLowerCase().includes(keyword)
+          );
+          if (matchedAsset) {
+            setSelectedAssetId(matchedAsset.id);
+          } else {
+            setSelectedAssetId('');
+          }
+        } else {
+          setSelectedAssetId('');
+        }
+
+        setTemplateApplied(true);
+      } else {
+        // 템플릿이 없을 경우 기본적으로 수동 설정을 위해 자산 비우고 모든 SaaS 체크 해제
+        setSelectedAssetId('');
+        setSelectedSaasIds([]);
+        setTemplateApplied(false);
+      }
+    } else {
+      setTemplateApplied(false);
     }
-  }, [selectedEmployee, saasServices]);
+  }, [selectedEmployee, saasServices, templates, unassignedAssets]);
 
   const handleToggleSaas = (saasId: string) => {
     setSelectedSaasIds(prev => 
@@ -234,11 +277,22 @@ export default function OnboardingPage() {
         <div className="lg:col-span-2 space-y-6">
           {selectedEmployee ? (
             <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-6">
-              <div className="border-b border-gray-100 pb-4">
-                <h3 className="text-xl font-bold text-[#020617]">
-                  {selectedEmployee.name} 사원 자원 설정
-                </h3>
-                <p className="text-xs text-gray-400 mt-1">부서: {selectedEmployee.department} | 직무: {selectedEmployee.role_title}</p>
+              <div className="border-b border-gray-100 pb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                  <h3 className="text-xl font-bold text-[#020617]">
+                    {selectedEmployee.name} 사원 자원 설정
+                  </h3>
+                  <p className="text-xs text-gray-400 mt-1">부서: {selectedEmployee.department} | 직무: {selectedEmployee.role_title}</p>
+                </div>
+                {templateApplied ? (
+                  <span className="self-start sm:self-center text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100 animate-in fade-in duration-200">
+                    부서 템플릿 자동 적용됨 ({selectedEmployee.department})
+                  </span>
+                ) : (
+                  <span className="self-start sm:self-center text-xs font-bold text-amber-600 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-100 animate-in fade-in duration-200">
+                    설정된 부서 템플릿 없음 (수동 설정)
+                  </span>
+                )}
               </div>
 
               {/* IT 자산 매핑 */}
