@@ -225,8 +225,8 @@ export default function OnboardingPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-3xl font-bold text-[#020617] tracking-tight">입사 자원 할당</h1>
-        <p className="text-gray-500 mt-2 text-base">신규 입사자의 직무에 알맞은 IT 장비와 SaaS 라이선스를 자동 매핑하고 배정을 승인합니다.</p>
+        <h1 className="text-3xl font-bold text-[#020617] tracking-tight">입사 자원 배부</h1>
+        <p className="text-gray-500 mt-2 text-base">신규 입사자의 부서 및 직무에 알맞은 IT 장비와 소프트웨어를 자동 매핑하고 배부를 승인합니다.</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

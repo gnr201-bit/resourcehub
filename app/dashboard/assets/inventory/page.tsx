@@ -336,8 +336,8 @@ export default function AssetInventoryPage() {
     <div className="space-y-8">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-[#020617] tracking-tight">IT 자산 재고 및 목록</h1>
-          <p className="text-gray-500 mt-2 text-base">조직 내 하드웨어(노트북, 모니터 등)의 실시간 수량, 배정주체, 재고 현황을 통합 관리합니다.</p>
+          <h1 className="text-3xl font-bold text-[#020617] tracking-tight">자산 현황</h1>
+          <p className="text-gray-500 mt-2 text-base">조직 내 하드웨어(노트북, 모니터 등)의 전체 재고량, 실사용량, 보관 상태를 통합 모니터링하고 배정합니다.</p>
         </div>
         <div className="flex gap-3">
           <button

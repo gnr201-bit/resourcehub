@@ -21,7 +21,11 @@ export default function SaasProvisioningPage() {
   const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
   const [selectedSaasId, setSelectedSaasId] = useState('');
   const [accountEmail, setAccountEmail] = useState('');
+  const [licenseKey, setLicenseKey] = useState('');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+
+  const selectedServiceObj = services.find(s => s.id === selectedSaasId);
+  const isSW = selectedServiceObj?.license_type === 'SW';
 
   const fetchData = async () => {
     setLoading(true);
@@ -30,7 +34,7 @@ export default function SaasProvisioningPage() {
       const [accountsResult, empResult, servicesResult] = await Promise.all([
         supabase
           .from('saas_accounts')
-          .select('*, employees(id, name, department), saas_services(id, name, used_licenses)')
+          .select('*, employees(id, name, department), saas_services(id, name, used_licenses, total_licenses, license_type)')
           .eq('status', 'active')
           .order('assigned_at', { ascending: false }),
         supabase
@@ -77,14 +81,14 @@ export default function SaasProvisioningPage() {
   // 수동 계정 프로비저닝 (배정)
   const handleProvision = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedEmployeeId || !selectedSaasId || !accountEmail) {
+    if (!selectedEmployeeId || !selectedSaasId || (isSW ? !licenseKey : !accountEmail)) {
       alert('필수 입력 항목을 채워주세요.');
       return;
     }
 
     const saas = services.find(s => s.id === selectedSaasId);
     if (saas && saas.used_licenses >= saas.total_licenses) {
-      alert('해당 SaaS 서비스의 라이선스 한도가 초과되어 추가 배정이 불가합니다.');
+      alert(`해당 ${isSW ? '소프트웨어' : 'SaaS'} 서비스의 라이선스 한도가 초과되어 추가 배정이 불가합니다.`);
       return;
     }
 
@@ -99,7 +103,7 @@ export default function SaasProvisioningPage() {
         .eq('status', 'active');
 
       if (existing && existing.length > 0) {
-        alert('이미 해당 임직원에게 발급된 활성 계정이 존재합니다.');
+        alert('이미 해당 임직원에게 발급된 활성 라이선스가 존재합니다.');
         setActionLoading(null);
         return;
       }
@@ -112,6 +116,7 @@ export default function SaasProvisioningPage() {
           saas_id: selectedSaasId,
           email: accountEmail,
           status: 'active',
+          license_key: isSW ? licenseKey : null,
           assigned_at: new Date().toISOString()
         });
 
@@ -127,20 +132,22 @@ export default function SaasProvisioningPage() {
 
       // 4. 로그에 기록
       const employee = employees.find(e => e.id === selectedEmployeeId);
+      const targetIdentifier = isSW ? `제품 키: ${licenseKey}` : `계정: ${accountEmail}`;
       await supabase
         .from('sync_logs')
         .insert({
-          log_type: 'saas_provisioning',
+          log_type: isSW ? 'sw_provisioning' : 'saas_provisioning',
           status: 'success',
-          message: `SaaS [${saas?.name}] 계정(${accountEmail})이 ${employee?.name} 사원에게 정상 할당되었습니다.`
+          message: `[${saas?.name}] 라이선스(${targetIdentifier})가 ${employee?.name} 사원에게 정상 할당되었습니다.`
         });
 
-      alert('성공적으로 SaaS 계정이 프로비저닝 되었습니다.');
+      alert(`성공적으로 ${isSW ? '소프트웨어 라이선스' : 'SaaS 계정'}가 프로비저닝 되었습니다.`);
       setIsModalOpen(false);
       // 폼 초기화
       setSelectedEmployeeId('');
       setSelectedSaasId('');
       setAccountEmail('');
+      setLicenseKey('');
       await fetchData();
     } catch (err) {
       console.error('Provisioning error:', err);
@@ -152,7 +159,9 @@ export default function SaasProvisioningPage() {
 
   // 계정 비활성화 (Deprovisioning)
   const handleRevokeAccount = async (account: SaasAccount) => {
-    const confirmRevoke = window.confirm(`[${(account as any).saas_services?.name}] 계정 (${account.email})을 비활성화하시겠습니까?`);
+    const isSWAccount = (account as any).saas_services?.license_type === 'SW';
+    const identifier = isSWAccount ? `제품 키: ${account.license_key}` : account.email;
+    const confirmRevoke = window.confirm(`[${(account as any).saas_services?.name}] 계정 (${identifier})을 비활성화하시겠습니까?`);
     if (!confirmRevoke) return;
 
     setActionLoading(account.id);
@@ -182,9 +191,9 @@ export default function SaasProvisioningPage() {
       await supabase
         .from('sync_logs')
         .insert({
-          log_type: 'saas_deprovisioning',
+          log_type: isSWAccount ? 'sw_deprovisioning' : 'saas_deprovisioning',
           status: 'success',
-          message: `SaaS [${(account as any).saas_services?.name}] 계정(${account.email})이 ${empName} 사원으로부터 회수되었습니다.`
+          message: `[${(account as any).saas_services?.name}] 라이선스(${identifier})가 ${empName} 사원으로부터 회수되었습니다.`
         });
 
       alert('계정 회수가 완료되었습니다.');
@@ -200,6 +209,7 @@ export default function SaasProvisioningPage() {
   const filteredAccounts = accounts.filter(account => {
     const matchesSearch =
       account.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (account.license_key || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (account.employees as any)?.name?.toLowerCase().includes(searchTerm.toLowerCase());
 
     const matchesService = selectedService === 'All' || (account as any).saas_services?.id === selectedService;
@@ -211,7 +221,7 @@ export default function SaasProvisioningPage() {
     return (
       <div className="flex flex-col items-center justify-center py-20 space-y-4">
         <Loader2 className="animate-spin text-[#00cfc1]" size={40} />
-        <p className="text-gray-500 text-sm">SaaS 계정 목록 데이터를 연동 중...</p>
+        <p className="text-gray-500 text-sm">계정 및 라이선스 목록 데이터를 연동 중...</p>
       </div>
     );
   }
@@ -221,7 +231,7 @@ export default function SaasProvisioningPage() {
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-[#020617] tracking-tight">계정 프로비저닝 관리</h1>
-          <p className="text-gray-500 mt-2 text-base">각 임직원별로 연동된 SaaS 어카운트 현황을 수동으로 배정(Provision)하거나 차단/회수(Deprovision)합니다.</p>
+          <p className="text-gray-500 mt-2 text-base">각 임직원별로 연동된 SaaS 어카운트 및 설치형 소프트웨어 라이선스를 수동으로 배정(Provision)하거나 차단/회수(Deprovision)합니다.</p>
         </div>
         <div>
           <button
@@ -229,7 +239,7 @@ export default function SaasProvisioningPage() {
             className="px-5 py-3 bg-[#00cfc1] hover:bg-[#00a89a] text-[#020617] font-bold rounded-lg transition-colors flex items-center gap-2 text-sm shadow-sm"
           >
             <UserPlus size={18} />
-            새 SaaS 계정 할당
+            새 라이선스 할당
           </button>
         </div>
       </div>
@@ -240,7 +250,7 @@ export default function SaasProvisioningPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
           <input
             type="text"
-            placeholder="직원 이름, SaaS 계정 메일 검색..."
+            placeholder="직원 이름, 계정 메일, 제품 키 검색..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-10 pr-4 py-2 text-sm rounded-lg border border-gray-200 focus:border-[#00cfc1] focus:ring-2 focus:ring-[#00cfc1]/20 transition-all outline-none"
@@ -252,9 +262,9 @@ export default function SaasProvisioningPage() {
           onChange={(e) => setSelectedService(e.target.value)}
           className="px-3 py-2 rounded-lg border border-gray-200 text-sm bg-white outline-none focus:border-[#00cfc1]"
         >
-          <option value="All">모든 SaaS 서비스</option>
+          <option value="All">모든 소프트웨어 서비스</option>
           {services.map(s => (
-            <option key={s.id} value={s.id}>{s.name}</option>
+            <option key={s.id} value={s.id}>{s.name} ({s.license_type})</option>
           ))}
         </select>
       </div>
@@ -265,8 +275,9 @@ export default function SaasProvisioningPage() {
           <table className="min-w-full divide-y divide-gray-100">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">SaaS 솔루션</th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">연동 계정 이메일</th>
+                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">솔루션 명칭</th>
+                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">구분</th>
+                <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">연동 계정 / 제품 키</th>
                 <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">배정 대상자</th>
                 <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">소속 부서</th>
                 <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">발급 일자</th>
@@ -277,6 +288,7 @@ export default function SaasProvisioningPage() {
               {filteredAccounts.length > 0 ? (
                 filteredAccounts.map((account) => {
                   const saasName = (account as any).saas_services?.name || 'SaaS';
+                  const saasType = (account as any).saas_services?.license_type || 'SaaS';
                   const empName = (account as any).employees?.name || '-';
                   const empDept = (account as any).employees?.department || '-';
 
@@ -285,8 +297,19 @@ export default function SaasProvisioningPage() {
                       <td className="whitespace-nowrap px-6 py-4 text-sm font-semibold text-[#020617]">
                         {saasName}
                       </td>
+                      <td className="whitespace-nowrap px-6 py-4 text-sm">
+                        <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${saasType === 'SW' ? 'bg-purple-50 text-purple-600' : 'bg-blue-50 text-blue-600'}`}>
+                          {saasType === 'SW' ? 'SW' : 'SaaS'}
+                        </span>
+                      </td>
                       <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-600">
-                        {account.email}
+                        {saasType === 'SW' ? (
+                          <span className="font-mono text-purple-700 bg-purple-50 px-2 py-1 rounded border border-purple-100 text-xs">
+                            🗝️ {account.license_key}
+                          </span>
+                        ) : (
+                          account.email
+                        )}
                       </td>
                       <td className="whitespace-nowrap px-6 py-4 text-sm font-semibold text-[#020617]">
                         {empName}
@@ -311,8 +334,8 @@ export default function SaasProvisioningPage() {
                 })
               ) : (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-sm text-gray-400">
-                    등록된 활성 SaaS 계정이 없습니다.
+                  <td colSpan={7} className="px-6 py-12 text-center text-sm text-gray-400">
+                    등록된 활성 계정 및 라이선스가 없습니다.
                   </td>
                 </tr>
               )}
@@ -328,9 +351,20 @@ export default function SaasProvisioningPage() {
             <div className="flex justify-between items-center border-b border-gray-100 pb-3">
               <h3 className="text-lg font-bold text-[#020617] flex items-center gap-1.5">
                 <Shield size={20} className="text-[#00cfc1]" />
-                새 SaaS 라이선스 배정
+                새 라이선스 할당 및 배정
               </h3>
-              <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-gray-600 text-sm font-semibold">✕</button>
+              <button 
+                onClick={() => {
+                  setIsModalOpen(false);
+                  setSelectedEmployeeId('');
+                  setSelectedSaasId('');
+                  setAccountEmail('');
+                  setLicenseKey('');
+                }} 
+                className="text-gray-400 hover:text-gray-600 text-sm font-semibold"
+              >
+                ✕
+              </button>
             </div>
 
             <form onSubmit={handleProvision} className="space-y-4">
@@ -352,7 +386,7 @@ export default function SaasProvisioningPage() {
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs font-bold text-gray-600">SaaS 솔루션 선택</label>
+                <label className="text-xs font-bold text-gray-600">소프트웨어 / SaaS 선택</label>
                 <select
                   required
                   value={selectedSaasId}
@@ -364,29 +398,52 @@ export default function SaasProvisioningPage() {
                     const isFull = saas.used_licenses >= saas.total_licenses;
                     return (
                       <option key={saas.id} value={saas.id} disabled={isFull}>
-                        {saas.name} (잔여 {Math.max(0, saas.total_licenses - saas.used_licenses)}개 / 총 {saas.total_licenses}개) {isFull ? '[한도 초과]' : ''}
+                        [{saas.license_type}] {saas.name} (잔여 {saas.total_licenses - saas.used_licenses}개 / 총 {saas.total_licenses}개) {isFull ? '[한도 초과]' : ''}
                       </option>
                     );
                   })}
                 </select>
               </div>
 
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-gray-600">SaaS 연동 이메일</label>
-                <input
-                  type="email"
-                  required
-                  value={accountEmail}
-                  onChange={(e) => setAccountEmail(e.target.value)}
-                  placeholder="name@company.com"
-                  className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-[#00cfc1] outline-none"
-                />
-              </div>
+              {selectedSaasId && (
+                isSW ? (
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-gray-600">제품 키 (License Key)</label>
+                    <input
+                      type="text"
+                      required
+                      value={licenseKey}
+                      onChange={(e) => setLicenseKey(e.target.value)}
+                      placeholder="예: XXXX-XXXX-XXXX-XXXX"
+                      className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-[#00cfc1] outline-none font-mono"
+                    />
+                    <p className="text-[10px] text-purple-600">설치형 소프트웨어는 이메일 대신 제품 키(License Key)를 필수로 입력해야 합니다.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-gray-600">SaaS 연동 이메일</label>
+                    <input
+                      type="email"
+                      required
+                      value={accountEmail}
+                      onChange={(e) => setAccountEmail(e.target.value)}
+                      placeholder="name@company.com"
+                      className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:border-[#00cfc1] outline-none"
+                    />
+                  </div>
+                )
+              )}
 
               <div className="flex justify-end space-x-2 pt-3">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
+                  onClick={() => {
+                    setIsModalOpen(false);
+                    setSelectedEmployeeId('');
+                    setSelectedSaasId('');
+                    setAccountEmail('');
+                    setLicenseKey('');
+                  }}
                   className="px-4 py-2 border border-gray-200 rounded-lg text-xs font-bold hover:bg-gray-50 text-gray-700 transition-colors"
                 >
                   취소

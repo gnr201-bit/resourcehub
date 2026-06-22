@@ -24,14 +24,23 @@ export default function LoginPage() {
     setLoading(true);
     setError(null);
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    console.log('Attempting login with:', email);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      console.log('Supabase signin response:', { data, error });
 
-    if (error) {
-      setError(error.message);
+      if (error) {
+        setError(error.message);
+        setLoading(false);
+      } else {
+        console.log('Login successful! Redirecting to /dashboard...');
+        router.push('/dashboard');
+        router.refresh();
+      }
+    } catch (err: any) {
+      console.error('Catch error during login:', err);
+      setError(err.message || '로그인 중 예외가 발생했습니다.');
       setLoading(false);
-    } else {
-      router.push('/dashboard');
-      router.refresh();
     }
   };
 
@@ -71,6 +80,7 @@ export default function LoginPage() {
         const { error: dbError } = await supabase
           .from('employees')
           .insert({
+            id: authData.user.id, // Auth User의 고유 UUID를 직원 테이블 기본키와 일치시킵니다.
             name,
             email,
             department,
@@ -174,7 +184,6 @@ export default function LoginPage() {
                     <option value="팀장">팀장</option>
                     <option value="수석연구원">수석연구원</option>
                     <option value="선임연구원">선임연구원</option>
-                    <option value="시스템관리자">시스템관리자</option>
                   </select>
                 </div>
               </div>

@@ -39,7 +39,7 @@ export default async function DashboardPage() {
   ] = await Promise.all([
     supabase
       .from('employees')
-      .select('*', { count: 'exact', head: true })
+      .select('id, name, department, role_title')
       .eq('status', 'active'),
     supabase
       .from('assets')
@@ -47,7 +47,7 @@ export default async function DashboardPage() {
       .not('assigned_to', 'is', null),
     supabase
       .from('saas_services')
-      .select('id, name, total_licenses, used_licenses, warning_threshold, price_per_license'),
+      .select('id, name, total_licenses, used_licenses, warning_threshold, price_per_license, license_type, billing_cycle'),
     supabase
       .from('assets')
       .select('id, name, serial_number, assigned_at, employees!inner(name, department, status, retired_at)')
@@ -69,13 +69,24 @@ export default async function DashboardPage() {
       .limit(5)
   ]);
 
-  const employeeCount = employeeCountResult.count;
+  const employees = employeeCountResult.data || [];
+  const employeeCount = employees.length;
   const assetCount = assetCountResult.count;
   const saasData = saasDataResult.data;
   const criticalAssets = criticalAssetsResult.data;
   const recentAssignments = recentAssignmentsResult.data;
   const assetCategoryData = assetCategoryResult.data;
   const pendingRequests = pendingRequestsResult.data;
+
+  // 임직원 부서/직급 분포 계산
+  const deptDistribution: Record<string, number> = {};
+  const roleDistribution: Record<string, number> = {};
+  employees.forEach((emp: any) => {
+    const dept = emp.department || '미지정';
+    const role = emp.role_title || '미지정';
+    deptDistribution[dept] = (deptDistribution[dept] || 0) + 1;
+    roleDistribution[role] = (roleDistribution[role] || 0) + 1;
+  });
 
   // Supabase 쿼리 오류 수집 및 로깅
   const errors = [
@@ -98,11 +109,25 @@ export default async function DashboardPage() {
   let totalLicenses = 0;
   let usedLicenses = 0;
   let totalMonthlyCost = 0;
+  let maxMonthlyCost = 0;
   if (saasData) {
     saasData.forEach(s => {
       totalLicenses += s.total_licenses || 0;
       usedLicenses += s.used_licenses || 0;
-      totalMonthlyCost += (s.used_licenses || 0) * (s.price_per_license || 0);
+
+      const price = s.price_per_license || 0;
+      const used = s.used_licenses || 0;
+      const total = s.total_licenses || 0;
+      const cycle = s.billing_cycle || 'monthly';
+
+      if (cycle === 'monthly') {
+        totalMonthlyCost += used * price;
+        maxMonthlyCost += total * price;
+      } else if (cycle === 'yearly') {
+        totalMonthlyCost += (used * price) / 12;
+        maxMonthlyCost += (total * price) / 12;
+      }
+      // perpetual(영구)은 일회성이므로 월 구독 예산 집계에서는 제외
     });
   }
   const saasUsageRate = totalLicenses > 0 ? Math.round((usedLicenses / totalLicenses) * 100) : 0;
@@ -136,6 +161,10 @@ export default async function DashboardPage() {
     });
   }
 
+  const totalAssetsCount = assetCategoryData?.length || 0;
+  const assignedAssetsCount = assetCategoryData?.filter((a: any) => a.assigned_to).length || 0;
+  const assetUsageRate = totalAssetsCount > 0 ? Math.round((assignedAssetsCount / totalAssetsCount) * 100) : 0;
+
   // 재고 부족 임계값 설정 (설정파일 기준)
   const STOCK_WARNING_THRESHOLD = assetStockThreshold;
   const stockWarnings = Object.entries(categoryStats)
@@ -148,7 +177,7 @@ export default async function DashboardPage() {
   // 재고 부족 경고 로그 비동기 적재 (24시간 이내 동일 카테고리 경고가 없을 때만)
   if (stockWarnings.length > 0) {
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    
+
     Promise.all(
       stockWarnings.map(async (warn) => {
         try {
@@ -195,44 +224,54 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      {stockWarnings.length > 0 && (
-        <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-2">
-          <div className="flex items-center gap-2 text-amber-800 font-bold text-sm">
-            <AlertTriangle size={18} className="text-amber-600" />
-            <span>IT 자산 재고 부족 경고 ({stockWarnings.length}건)</span>
-          </div>
-          <p className="text-xs text-amber-700">다음 카테고리의 미배정(즉시 지급 가능) 재고가 임계값 이하로 부족합니다. 신규 장비 입고 또는 자원 회수 처리를 검토해 주세요.</p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 mt-1">
-            {stockWarnings.map((warn) => (
-              <div key={warn.category} className="bg-white/80 p-2.5 rounded-lg border border-amber-100 flex justify-between items-center text-xs">
-                <span className="font-bold text-gray-700">{warn.category}</span>
-                <span className="font-semibold text-amber-600 bg-amber-100/50 px-2 py-0.5 rounded-full">
-                  재고 {warn.unassigned}대 남음
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* 메트릭 카드 영역 (4열 그리드) */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <Link href="/dashboard/settings/hr-sync" className="block group">
-          <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm hover:border-[#00cfc1]/50 hover:shadow-md transition-all duration-200 cursor-pointer h-full">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold text-gray-500 group-hover:text-[#00cfc1] transition-colors">재직 중 임직원</h3>
-              <div className="p-2 bg-[#00cfc1]/10 rounded-lg group-hover:bg-[#00cfc1]/20 transition-colors">
-                <UserCheck className="text-[#00cfc1]" size={20} />
+        <div className="relative group/tooltip">
+          <Link href="/dashboard/settings/hr-sync" className="block">
+            <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm hover:border-[#00cfc1]/50 hover:shadow-md transition-all duration-200 cursor-pointer h-full">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold text-gray-500 hover:text-[#00cfc1] transition-colors">재직 중 임직원</h3>
+                <div className="p-2 bg-[#00cfc1]/10 rounded-lg hover:bg-[#00cfc1]/20 transition-colors">
+                  <UserCheck className="text-[#00cfc1]" size={20} />
+                </div>
+              </div>
+              <div className="flex items-baseline">
+                <p className="text-3xl font-bold text-[#020617]">{employeeCount || 0}</p>
+                <span className="text-sm font-normal text-gray-400 ml-1">명</span>
+              </div>
+              <p className="text-xs text-gray-400 mt-2 flex items-center gap-1">인사 연동 데이터 기준 <ArrowRight size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" /></p>
+            </div>
+          </Link>
+
+          {/* 부서/직급 분포 팝오버 툴팁 */}
+          <div className="absolute left-0 bottom-full mb-2 hidden group-hover/tooltip:block bg-[#0f172a] text-white p-4 rounded-xl text-xs z-50 shadow-xl min-w-[240px] border border-gray-800 pointer-events-none">
+            <div className="space-y-3">
+              <div>
+                <h4 className="font-bold text-[#00cfc1] border-b border-gray-850 pb-1 mb-1.5">부서별 분포</h4>
+                <div className="space-y-1">
+                  {Object.entries(deptDistribution).map(([dept, count]) => (
+                    <div key={dept} className="flex justify-between">
+                      <span className="text-gray-300">{dept}</span>
+                      <span className="font-semibold">{count}명</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <h4 className="font-bold text-[#3B82F6] border-b border-gray-855 pb-1 mb-1.5">직급별 분포</h4>
+                <div className="space-y-1">
+                  {Object.entries(roleDistribution).map(([role, count]) => (
+                    <div key={role} className="flex justify-between">
+                      <span className="text-gray-300">{role}</span>
+                      <span className="font-semibold">{count}명</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
-            <div className="flex items-baseline">
-              <p className="text-3xl font-bold text-[#020617]">{employeeCount || 0}</p>
-              <span className="text-sm font-normal text-gray-400 ml-1">명</span>
-            </div>
-            <p className="text-xs text-gray-400 mt-2 flex items-center gap-1">인사 연동 데이터 기준 <ArrowRight size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" /></p>
           </div>
-        </Link>
-        
+        </div>
+
         <Link href="/dashboard/assets/inventory" className="block group">
           <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm hover:border-[#3B82F6]/50 hover:shadow-md transition-all duration-200 cursor-pointer h-full">
             <div className="flex items-center justify-between mb-4">
@@ -242,10 +281,20 @@ export default async function DashboardPage() {
               </div>
             </div>
             <div className="flex items-baseline">
-              <p className="text-3xl font-bold text-[#020617]">{assetCount || 0}</p>
-              <span className="text-sm font-normal text-gray-400 ml-1">대</span>
+              <p className="text-3xl font-bold text-[#020617]">{assignedAssetsCount || 0}</p>
+              <span className="text-sm font-normal text-gray-400 ml-1">/ {totalAssetsCount || 0} 대</span>
+              <span className="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full ml-3 font-semibold">{assetUsageRate}%</span>
             </div>
-            <p className="text-xs text-gray-400 mt-2 flex items-center gap-1">노트북, 모니터 등 지급 장비 <ArrowRight size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" /></p>
+
+            {/* 자산 사용률 프로그레스 바 */}
+            <div className="mt-4 space-y-1">
+              <div className="w-full bg-gray-100 rounded-full h-1.5">
+                <div
+                  className="bg-[#3B82F6] h-1.5 rounded-full transition-all duration-500"
+                  style={{ width: `${assetUsageRate}%` }}
+                ></div>
+              </div>
+            </div>
           </div>
         </Link>
 
@@ -261,15 +310,20 @@ export default async function DashboardPage() {
               <p className="text-3xl font-bold text-[#020617]">{totalMonthlyCost.toLocaleString()}</p>
               <span className="text-sm font-normal text-gray-400 ml-1">원</span>
             </div>
-            {/* 사용률 및 심플 프로그레스 바 */}
-            <div className="mt-2.5 space-y-1">
+
+            {/* 실사용 비용 vs 최대 예상 비용 표시 */}
+            <div className="mt-3 space-y-1.5">
+              <div className="flex justify-between text-xs text-gray-400">
+                <span>최대 예상 비용 (한도)</span>
+                <span className="font-semibold text-gray-600">{maxMonthlyCost.toLocaleString()}원</span>
+              </div>
               <div className="flex justify-between text-xs text-gray-400">
                 <span>라이선스 사용률</span>
                 <span className="font-semibold text-gray-600">{saasUsageRate}%</span>
               </div>
               <div className="w-full bg-gray-100 rounded-full h-1.5">
-                <div 
-                  className="bg-[#84CC16] h-1.5 rounded-full transition-all duration-500" 
+                <div
+                  className="bg-[#84CC16] h-1.5 rounded-full transition-all duration-500"
                   style={{ width: `${saasUsageRate}%` }}
                 ></div>
               </div>
@@ -278,9 +332,8 @@ export default async function DashboardPage() {
         </Link>
 
         <Link href="/dashboard/hr-events/offboarding" className="block group">
-          <div className={`p-6 rounded-xl border relative overflow-hidden transition-all duration-200 hover:shadow-md h-full cursor-pointer ${
-            criticalCount > 0 ? 'border-red-200 bg-red-50/10 hover:border-[#EF4444]/50' : 'border-gray-100 hover:border-gray-300'
-          }`}>
+          <div className={`p-6 rounded-xl border relative overflow-hidden transition-all duration-200 hover:shadow-md h-full cursor-pointer ${criticalCount > 0 ? 'border-red-200 bg-red-50/10 hover:border-[#EF4444]/50' : 'border-gray-100 hover:border-gray-300'
+            }`}>
             {criticalCount > 0 && <div className="absolute top-0 left-0 w-1.5 h-full bg-[#EF4444]"></div>}
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold text-gray-500 group-hover:text-[#EF4444] transition-colors">퇴사자 미회수 자산</h3>
@@ -299,75 +352,131 @@ export default async function DashboardPage() {
         </Link>
       </div>
 
-      {/* 상세 영역 */}
+      {/* 상세 영역 1 */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        
-        {/* 최근 배정 추세 */}
-        <div className="lg:col-span-2 bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-6">
-          <div className="flex items-center justify-between">
-            <h3 className="text-lg font-bold text-[#020617]">최근 자산 배정 현황</h3>
-            <Link 
-              href="/dashboard/assets/history" 
-              className="text-sm font-semibold text-[#00cfc1] hover:text-[#00a89a] flex items-center gap-1 transition-colors"
-            >
-              전체 이력 보기 <ArrowRight size={16} />
-            </Link>
+
+        {/* 왼쪽 2열: 대기 중인 자원 요청 & 최근 자산 배정 현황 */}
+        <div className="lg:col-span-2 space-y-8">
+
+          {/* 대기 중인 자원 요청 (상향 리배치) */}
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-[#020617] flex items-center gap-2">
+                대기 중인 자원 요청
+                {pendingRequestCount > 0 && (
+                  <span className="text-xs bg-amber-50 text-amber-600 px-2 py-0.5 rounded-full font-bold">
+                    {pendingRequestCount}건
+                  </span>
+                )}
+              </h3>
+              <Link
+                href="/dashboard/portal/admin-requests"
+                className="text-sm font-semibold text-[#00cfc1] hover:text-[#00a89a] flex items-center gap-1 transition-colors"
+              >
+                요청 관리 →
+              </Link>
+            </div>
+
+            <div className="space-y-2">
+              {pendingRequests && pendingRequests.length > 0 ? (
+                pendingRequests.map((req: any) => (
+                  <div key={req.id} className="p-3.5 border border-amber-100 bg-amber-50/5 rounded-xl flex items-center justify-between hover:bg-amber-50/20 transition-colors">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${req.request_type === 'new_resource' ? 'bg-blue-50 text-blue-600' : 'bg-orange-50 text-orange-600'}`}>
+                          {req.request_type === 'new_resource' ? '신규' : '반납'}
+                        </span>
+                        <span className="text-xs text-gray-500 font-medium">[{req.resource_category}]</span>
+                        <p className="text-sm font-bold text-[#020617]">{req.resource_name}</p>
+                      </div>
+                      <p className="text-xs text-gray-450 mt-1">
+                        {(req.employees as any)?.name || '-'} ({(req.employees as any)?.department || '-'}) · {new Date(req.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <Link
+                      href="/dashboard/portal/admin-requests"
+                      className="text-xs font-semibold text-amber-600 hover:underline bg-amber-50 px-2.5 py-1.5 rounded-lg border border-amber-100/50 hover:bg-amber-100/80 transition-colors"
+                    >
+                      처리하기
+                    </Link>
+                  </div>
+                ))
+              ) : (
+                <div className="py-8 text-center text-sm text-gray-400 border border-dashed border-gray-200 rounded-xl">
+                  대기 중인 자원 요청이 없습니다.
+                </div>
+              )}
+            </div>
           </div>
 
-          <div className="overflow-hidden rounded-lg border border-gray-100">
-            <table className="min-w-full divide-y divide-gray-100">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">자산 정보</th>
-                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">배정 대상자</th>
-                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">부서</th>
-                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">배정 일자</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100 bg-white">
-                {recentAssignments && recentAssignments.length > 0 ? (
-                  recentAssignments.map((asset) => (
-                    <tr key={asset.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="whitespace-nowrap px-6 py-4">
-                        <div className="text-sm font-semibold text-[#020617]">{asset.name}</div>
-                        <div className="text-xs text-gray-400">{asset.serial_number}</div>
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4 text-sm text-[#020617]">
-                        {(asset.employees as any) ? (
-                          <EmployeeResourcesModal
-                            employeeId={(asset.employees as any).id}
-                            employeeName={(asset.employees as any).name}
-                            employeeDept={(asset.employees as any).department}
-                            employeeRole={(asset.employees as any).role_title}
-                          />
-                        ) : '-'}
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                        {(asset.employees as any)?.department || '-'}
-                      </td>
-                      <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-400">
-                        {asset.assigned_at ? new Date(asset.assigned_at).toLocaleDateString() : '-'}
+          {/* 최근 자산 배정 현황 */}
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-[#020617]">최근 자산 배정 현황</h3>
+              <Link
+                href="/dashboard/assets/history"
+                className="text-sm font-semibold text-[#00cfc1] hover:text-[#00a89a] flex items-center gap-1 transition-colors"
+              >
+                전체 이력 보기 <ArrowRight size={16} />
+              </Link>
+            </div>
+
+            <div className="overflow-hidden rounded-lg border border-gray-100">
+              <table className="min-w-full divide-y divide-gray-100">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">자산 정보</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">배정 대상자</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">부서</th>
+                    <th className="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase">배정 일자</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 bg-white">
+                  {recentAssignments && recentAssignments.length > 0 ? (
+                    recentAssignments.map((asset) => (
+                      <tr key={asset.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="whitespace-nowrap px-6 py-4">
+                          <div className="text-sm font-semibold text-[#020617]">{asset.name}</div>
+                          <div className="text-xs text-gray-400">{asset.serial_number}</div>
+                        </td>
+                        <td className="whitespace-nowrap px-6 py-4 text-sm text-[#020617]">
+                          {(asset.employees as any) ? (
+                            <EmployeeResourcesModal
+                              employeeId={(asset.employees as any).id}
+                              employeeName={(asset.employees as any).name}
+                              employeeDept={(asset.employees as any).department}
+                              employeeRole={(asset.employees as any).role_title}
+                            />
+                          ) : '-'}
+                        </td>
+                        <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
+                          {(asset.employees as any)?.department || '-'}
+                        </td>
+                        <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-400">
+                          {asset.assigned_at ? new Date(asset.assigned_at).toLocaleDateString() : '-'}
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={4} className="px-6 py-8 text-center text-sm text-gray-400">
+                        최근 배정된 자산이 없습니다.
                       </td>
                     </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={4} className="px-6 py-8 text-center text-sm text-gray-400">
-                      최근 배정된 자산이 없습니다.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
+
         </div>
 
-        {/* SaaS 서비스별 라이선스 사용률 차트 (PRD 4.2) */}
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-6">
+        {/* 오른쪽 1열: SaaS 서비스별 라이선스 사용률 차트 */}
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-6 h-fit">
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-bold text-[#020617]">SaaS 라이선스 사용률</h3>
-            <Link 
-              href="/dashboard/saas/usage" 
+            <h3 className="text-lg font-bold text-[#020617]">라이선스 사용률</h3>
+            <Link
+              href="/dashboard/saas/usage"
               className="text-sm font-semibold text-[#00cfc1] hover:text-[#00a89a] flex items-center gap-1 transition-colors"
             >
               상세 보기 <ArrowRight size={16} />
@@ -382,16 +491,32 @@ export default async function DashboardPage() {
                 const pct = total > 0 ? Math.round((used / total) * 100) : 0;
                 const remaining = Math.max(0, total - used);
                 const isWarning = remaining <= (s.warning_threshold || 5);
-                const cost = used * (s.price_per_license || 0);
+
+                const price = s.price_per_license || 0;
+                const cycle = s.billing_cycle || 'monthly';
+                let displayCost = used * price;
+                let displayLabel = '월';
+                if (cycle === 'yearly') {
+                  displayCost = Math.round((used * price) / 12);
+                  displayLabel = '월 환산';
+                } else if (cycle === 'perpetual') {
+                  displayLabel = '구매 총액';
+                }
 
                 return (
                   <div key={s.id} className="space-y-1.5">
                     <div className="flex justify-between items-center text-sm">
                       <div className="flex flex-col">
-                        <span className="font-semibold text-[#020617]">{s.name}</span>
-                        <span className="text-xs text-gray-400">월 {cost.toLocaleString()}원</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold text-[#020617]">{s.name}</span>
+                          <span className={`text-[9px] px-1 py-0.2 rounded font-bold ${s.license_type === 'SW' ? 'bg-purple-50 text-purple-600' : 'bg-blue-50 text-blue-600'}`}>
+                            {s.license_type === 'SW' ? 'SW' : 'SaaS'}
+                          </span>
+                          <span className="text-[8px] text-gray-400 font-medium">({cycle === 'monthly' ? '월' : cycle === 'yearly' ? '연' : '영구'})</span>
+                        </div>
+                        <span className="text-xs text-gray-400">{displayLabel} {displayCost.toLocaleString()}원</span>
                       </div>
-                      <span className="text-xs text-gray-400">
+                      <span className="text-xs text-gray-400 font-medium">
                         {used}/{total}개
                         {isWarning && (
                           <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-amber-50 text-amber-600 rounded font-bold">
@@ -401,7 +526,7 @@ export default async function DashboardPage() {
                       </span>
                     </div>
                     <div className="w-full bg-gray-100 rounded-full h-2">
-                      <div 
+                      <div
                         className={`h-2 rounded-full transition-all duration-500 ${isWarning ? 'bg-amber-500' : 'bg-[#00cfc1]'}`}
                         style={{ width: `${pct}%` }}
                       />
@@ -416,15 +541,15 @@ export default async function DashboardPage() {
         </div>
       </div>
 
-      {/* IT 자산 유형별 분포 및 대기 요청 (PRD 4.2 + 요청 관리) */}
+      {/* 상세 영역 2 */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
 
         {/* IT 자산 카테고리별 분포 */}
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-bold text-[#020617]">IT 자산 유형별 분포</h3>
-            <Link 
-              href="/dashboard/assets/inventory" 
+            <Link
+              href="/dashboard/assets/inventory"
               className="text-sm font-semibold text-[#00cfc1] hover:text-[#00a89a] flex items-center gap-1 transition-colors"
             >
               상세 보기 <ArrowRight size={16} />
@@ -452,105 +577,58 @@ export default async function DashboardPage() {
           </div>
         </div>
 
-        {/* 대기 중인 자원 요청 */}
-        <div className="lg:col-span-2 bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-4">
+        {/* 주의 필요 자원 리스트 (lg:col-span-2) */}
+        <div className="lg:col-span-2 bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-6">
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-bold text-[#020617] flex items-center gap-2">
-              대기 중인 자원 요청
-              {pendingRequestCount > 0 && (
-                <span className="text-xs bg-amber-50 text-amber-600 px-2 py-0.5 rounded-full font-bold">
-                  {pendingRequestCount}건
+              주의 필요 자원
+              {criticalCount > 0 && (
+                <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold text-white bg-[#EF4444] animate-pulse">
+                  CRITICAL
                 </span>
               )}
             </h3>
-            <Link 
-              href="/dashboard/portal/admin-requests" 
-              className="text-sm font-semibold text-[#00cfc1] hover:text-[#00a89a] flex items-center gap-1 transition-colors"
-            >
-              요청 관리 →
-            </Link>
+            <span className="text-xs text-gray-400 font-medium">퇴사자 미회수 자원 현황</span>
           </div>
 
-          <div className="space-y-2">
-            {pendingRequests && pendingRequests.length > 0 ? (
-              pendingRequests.map((req: any) => (
-                <div key={req.id} className="p-3 border border-amber-100 bg-amber-50/5 rounded-xl flex items-center justify-between hover:bg-amber-50/20 transition-colors">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${req.request_type === 'new_resource' ? 'bg-blue-50 text-blue-600' : 'bg-orange-50 text-orange-600'}`}>
-                        {req.request_type === 'new_resource' ? '신규' : '반납'}
-                      </span>
-                      <p className="text-sm font-bold text-[#020617]">{req.resource_name}</p>
-                    </div>
-                    <p className="text-xs text-gray-400 mt-1">
-                      {(req.employees as any)?.name || '-'} ({(req.employees as any)?.department || '-'}) · {new Date(req.created_at).toLocaleDateString()}
-                    </p>
-                  </div>
-                  <Link 
-                    href="/dashboard/portal/admin-requests" 
-                    className="text-xs font-semibold text-amber-600 hover:underline"
-                  >
-                    처리하기
-                  </Link>
-                </div>
-              ))
-            ) : (
-              <div className="py-8 text-center text-sm text-gray-400 border border-dashed border-gray-200 rounded-xl">
-                대기 중인 자원 요청이 없습니다.
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* 주의 필요 자원 리스트 */}
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-6">
-          <div className="flex items-center justify-between">
-            <h3 className="text-lg font-bold text-[#020617] flex items-center">
-              주의 필요 자원
-            </h3>
-            {criticalCount > 0 && (
-              <span className="inline-block px-2 py-0.5 rounded text-xs font-semibold text-white bg-[#EF4444] animate-pulse">
-                CRITICAL
-              </span>
-            )}
-          </div>
-
-          <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {criticalAssetsFiltered && criticalAssetsFiltered.length > 0 ? (
               criticalAssetsFiltered.map((asset) => (
-                <div 
-                  key={asset.id} 
-                  className="p-4 border border-red-100 bg-red-50/5 rounded-xl hover:bg-red-50/20 transition-colors cursor-pointer space-y-2"
+                <div
+                  key={asset.id}
+                  className="p-4 border border-red-100 bg-red-50/5 rounded-xl hover:bg-red-50/20 transition-all cursor-pointer space-y-2.5 flex flex-col justify-between"
                 >
-                  <div className="flex justify-between items-start">
-                    <p className="text-sm font-bold text-[#020617]">{asset.name}</p>
-                    <span className="text-xs text-[#EF4444] bg-red-50 px-2 py-0.5 rounded-full font-semibold">
-                      회수 대상
-                    </span>
-                  </div>
-                  <div className="text-xs text-gray-500 space-y-1">
-                    <div className="flex items-center gap-1">
-                      <span>퇴사자:</span>
-                      {(asset.employees as any) ? (
-                        <EmployeeResourcesModal
-                          employeeId={(asset.employees as any).id}
-                          employeeName={(asset.employees as any).name}
-                          employeeDept={(asset.employees as any).department}
-                          employeeRole={(asset.employees as any).role_title}
-                        />
-                      ) : (
-                        <span>알수없음</span>
-                      )}
-                      <span className="text-gray-400">({(asset.employees as any)?.department || '-'})</span>
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-start">
+                      <p className="text-sm font-bold text-[#020617] truncate max-w-[150px]">{asset.name}</p>
+                      <span className="text-[10px] text-[#EF4444] bg-red-50 px-2 py-0.5 rounded-full font-semibold shrink-0">
+                        회수 대상
+                      </span>
                     </div>
-                    <p className="flex items-center gap-1 text-gray-400 mt-1">
-                      <Calendar size={12} />
-                      퇴사일: {(asset.employees as any)?.retired_at ? new Date((asset.employees as any).retired_at).toLocaleDateString() : '-'}
-                    </p>
+                    <div className="text-xs text-gray-500 space-y-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-gray-400">퇴사자:</span>
+                        {(asset.employees as any) ? (
+                          <EmployeeResourcesModal
+                            employeeId={(asset.employees as any).id}
+                            employeeName={(asset.employees as any).name}
+                            employeeDept={(asset.employees as any).department}
+                            employeeRole={(asset.employees as any).role_title}
+                          />
+                        ) : (
+                          <span>알수없음</span>
+                        )}
+                        <span className="text-gray-400">({(asset.employees as any)?.department || '-'})</span>
+                      </div>
+                      <p className="flex items-center gap-1 text-gray-400 mt-1">
+                        <Calendar size={12} />
+                        퇴사일: {(asset.employees as any)?.retired_at ? new Date((asset.employees as any).retired_at).toLocaleDateString() : '-'}
+                      </p>
+                    </div>
                   </div>
                   <div className="pt-2 border-t border-dashed border-red-100 flex justify-end">
-                    <Link 
-                      href="/dashboard/hr-events/offboarding" 
+                    <Link
+                      href="/dashboard/hr-events/offboarding"
                       className="text-xs font-semibold text-[#EF4444] hover:underline flex items-center gap-1"
                     >
                       회수 처리하러 가기 <ArrowRight size={12} />
@@ -559,13 +637,35 @@ export default async function DashboardPage() {
                 </div>
               ))
             ) : (
-              <div className="py-12 text-center text-sm text-gray-400 border border-dashed border-gray-200 rounded-xl">
+              <div className="col-span-2 py-12 text-center text-sm text-gray-400 border border-dashed border-gray-200 rounded-xl">
                 주의 또는 미회수 자산이 없습니다.
               </div>
             )}
           </div>
         </div>
+
       </div>
+
+      {/* IT 자산 재고 부족 경고 배너 (최하단 하강) */}
+      {stockWarnings.length > 0 && (
+        <div className="p-4.5 bg-amber-50/60 border border-amber-200 rounded-xl space-y-3">
+          <div className="flex items-center gap-2 text-amber-800 font-bold text-sm">
+            <AlertTriangle size={18} className="text-amber-600" />
+            <span>IT 자산 재고 부족 경고 ({stockWarnings.length}건)</span>
+          </div>
+          <p className="text-xs text-amber-700">다음 카테고리의 미배정(즉시 지급 가능) 재고가 임계값 이하로 부족합니다. 신규 장비 입고 또는 자원 회수 처리를 검토해 주세요.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 mt-1">
+            {stockWarnings.map((warn) => (
+              <div key={warn.category} className="bg-white/90 p-2.5 rounded-lg border border-amber-100 flex justify-between items-center text-xs shadow-sm">
+                <span className="font-bold text-gray-700">{warn.category}</span>
+                <span className="font-semibold text-amber-600 bg-amber-100/50 px-2 py-0.5 rounded-full">
+                  재고 {warn.unassigned}대 남음
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

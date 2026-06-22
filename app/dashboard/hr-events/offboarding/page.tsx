@@ -19,18 +19,28 @@ export default function OffboardingPage() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      // 1. 퇴사 상태인 임직원 조회 (status = 'retired')
-      const { data: empData } = await supabase
+      // 1. 퇴사 자원 회수가 미완료인 임직원 조회 (status = 'retired' 이면서 offboarding hr_events의 상태가 'completed'가 아닌 대상)
+      const { data: empData, error: fetchError } = await supabase
         .from('employees')
-        .select('*')
+        .select('*, hr_events!inner(status, event_type)')
         .eq('status', 'retired')
+        .eq('hr_events.event_type', 'offboarding')
+        .neq('hr_events.status', 'completed')
         .order('name');
 
-      setEmployees(empData || []);
+      if (fetchError) {
+        console.error('Fetch error:', fetchError);
+      }
+
+      setEmployees((empData as any) || []);
       
-      if (empData && empData.length > 0 && !selectedEmployee) {
-        setSelectedEmployee(empData[0]);
-      } else if (empData && empData.length === 0) {
+      if (empData && empData.length > 0) {
+        // 현재 선택된 직원이 목록에 여전히 존재하면 유지하고, 존재하지 않으면 첫 번째 대기자로 선택
+        const stillExists = selectedEmployee && empData.some(emp => emp.id === selectedEmployee.id);
+        if (!stillExists) {
+          setSelectedEmployee(empData[0]);
+        }
+      } else {
         setSelectedEmployee(null);
       }
     } catch (err) {

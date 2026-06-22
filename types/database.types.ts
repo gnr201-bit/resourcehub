@@ -36,6 +36,8 @@ export interface SaasService {
   used_licenses: number;
   warning_threshold: number;
   price_per_license: number;
+  license_type: 'SaaS' | 'SW';
+  billing_cycle: 'monthly' | 'yearly' | 'perpetual';
   created_at: string;
 }
 
@@ -45,6 +47,7 @@ export interface SaasAccount {
   saas_id: string;
   email: string;
   status: 'active' | 'inactive';
+  license_key: string | null;
   assigned_at: string;
   revoked_at: string | null;
   created_at: string;
