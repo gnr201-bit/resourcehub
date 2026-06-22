@@ -9,13 +9,13 @@ export default function TransferPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  
-  // Selection states
-  const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
+
+  // HR Events states
+  const [hrEvents, setHrEvents] = useState<any[]>([]);
+  const [selectedEvent, setSelectedEvent] = useState<any | null>(null);
   const [assignedAssets, setAssignedAssets] = useState<Asset[]>([]);
-  
-  // New transfer details input
+
+  // New transfer details input (pre-filled from sync event details)
   const [newDepartment, setNewDepartment] = useState('');
   const [newRoleTitle, setNewRoleTitle] = useState('');
   const [keepAssets, setKeepAssets] = useState<Record<string, boolean>>({});
@@ -23,19 +23,30 @@ export default function TransferPage() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      // 재직 중인 직원 리스트 조회 (부서 이동 대상자로 지정할 수 있도록)
-      const { data: empData } = await supabase
-        .from('employees')
-        .select('*')
-        .eq('status', 'active')
-        .order('name');
+      // 1. 대기 중(status = 'pending')인 부서이동(transfer) HR 이벤트 조회
+      const { data: eventData, error } = await supabase
+        .from('hr_events')
+        .select('*, employees!inner(id, name, department, role_title, email)')
+        .eq('event_type', 'transfer')
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false });
 
-      setEmployees(empData || []);
-      
-      if (empData && empData.length > 0 && !selectedEmployee) {
-        setSelectedEmployee(empData[0]);
-      } else if (empData && empData.length === 0) {
-        setSelectedEmployee(null);
+      if (error) {
+        console.error('Failed to fetch transfer events:', error);
+        setHrEvents([]);
+      } else {
+        setHrEvents(eventData || []);
+      }
+
+      // select default event if exists
+      if (eventData && eventData.length > 0) {
+        // 현재 선택된 이벤트가 여전히 목록에 있는지 확인
+        const stillExists = selectedEvent && eventData.some((e: any) => e.id === selectedEvent.id);
+        if (!stillExists) {
+          setSelectedEvent(eventData[0]);
+        }
+      } else {
+        setSelectedEvent(null);
       }
     } catch (err) {
       console.error('Data fetch error:', err);
@@ -50,9 +61,9 @@ export default function TransferPage() {
         .from('assets')
         .select('*')
         .eq('assigned_to', empId);
-      
+
       setAssignedAssets(assetData || []);
-      
+
       // 기본적으로 모든 자산을 새 부서에서도 유지하는 것으로 설정
       const assetKeepMap: Record<string, boolean> = {};
       assetData?.forEach(asset => {
@@ -69,27 +80,32 @@ export default function TransferPage() {
   }, []);
 
   useEffect(() => {
-    if (selectedEmployee) {
-      fetchAssets(selectedEmployee.id);
-      setNewDepartment('');
-      setNewRoleTitle('');
+    if (selectedEvent) {
+      const emp = selectedEvent.employees;
+      fetchAssets(emp.id);
+
+      // 동기화된 이벤트 세부 정보를 가져와 프리필(pre-fill)
+      setNewDepartment(selectedEvent.details?.to_dept || '');
+      setNewRoleTitle(selectedEvent.details?.to_role || '');
     } else {
       setAssignedAssets([]);
+      setNewDepartment('');
+      setNewRoleTitle('');
     }
-  }, [selectedEmployee]);
+  }, [selectedEvent]);
 
   const handleToggleKeepAsset = (assetId: string) => {
     setKeepAssets(prev => ({ ...prev, [assetId]: !prev[assetId] }));
   };
 
   const handleProcessTransfer = async () => {
-    if (!selectedEmployee || !newDepartment || !newRoleTitle) {
+    if (!selectedEvent || !newDepartment || !newRoleTitle) {
       alert('새 부서와 직무 정보를 입력해 주세요.');
       return;
     }
 
-    setActionLoading(selectedEmployee.id);
-    const empId = selectedEmployee.id;
+    const emp = selectedEvent.employees;
+    setActionLoading(selectedEvent.id);
 
     try {
       // 1. 임직원의 부서 및 직급 정보 업데이트
@@ -99,9 +115,9 @@ export default function TransferPage() {
           department: newDepartment,
           role_title: newRoleTitle
         })
-        .eq('id', empId);
+        .eq('id', emp.id);
 
-      // 2. 선택 해제된 자산 회수 처리
+      // 2. 선택 해제된 자산 회수 처리 및 유지된 자산의 위치 정보 변경
       for (const asset of assignedAssets) {
         const isKept = keepAssets[asset.id];
         if (!isKept) {
@@ -126,20 +142,31 @@ export default function TransferPage() {
         }
       }
 
-      // 3. 동기화 로그 기록
+      // 3. HR 이벤트 상태를 'completed'로 업데이트
+      await supabase
+        .from('hr_events')
+        .update({
+          status: 'completed',
+          processed_at: new Date().toISOString()
+        })
+        .eq('id', selectedEvent.id);
+
+      // 4. 동기화 로그 기록
       await supabase
         .from('sync_logs')
         .insert({
           log_type: 'transfer_adjustment',
           status: 'success',
-          message: `${selectedEmployee.name} 사원의 부서 이동 처리 완료 (${selectedEmployee.department} -> ${newDepartment})`
+          message: `${emp.name} 사원의 부서 이동 및 자원 조정 처리 완료 (${emp.department} -> ${newDepartment})`,
+          details: `임직원 ID: ${emp.id}, 이벤트 ID: ${selectedEvent.id}`
         });
 
-      alert(`${selectedEmployee.name} 사원의 부서 이동 및 자원 조정 처리가 완료되었습니다.`);
+      alert(`${emp.name} 사원의 부서 이동 및 자원 조정 처리가 승인/완료되었습니다.`);
+      setSelectedEvent(null);
       await fetchData();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Transfer processing error:', err);
-      alert('부서 이동 처리 중 오류가 발생했습니다.');
+      alert(`부서 이동 처리 중 오류가 발생했습니다: ${err.message || String(err)}`);
     } finally {
       setActionLoading(null);
     }
@@ -149,7 +176,7 @@ export default function TransferPage() {
     return (
       <div className="flex flex-col items-center justify-center py-20 space-y-4">
         <Loader2 className="animate-spin text-[#00cfc1]" size={40} />
-        <p className="text-gray-500 text-sm">임직원 데이터를 불러오는 중...</p>
+        <p className="text-gray-500 text-sm">인사 이동 이벤트 데이터를 불러오는 중...</p>
       </div>
     );
   }
@@ -157,40 +184,51 @@ export default function TransferPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-3xl font-bold text-[#020617] tracking-tight">HR 정보 추가 지원 할당</h1>
+        <h1 className="text-3xl font-bold text-[#020617] tracking-tight">인사 이동 자원 관리</h1>
         <p className="text-gray-500 mt-2 text-base">직원의 부서 이동 또는 정기 인사에 따라 직급 및 부서에 맞게 기존 지급 장비를 회수하거나 새로운 표준 자원으로 지원 및 할당합니다.</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* 좌측: 재직 직원 명단 */}
+        {/* 좌측: 부서 이동 대기 명단 */}
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-4">
           <h3 className="text-lg font-bold text-[#020617] flex items-center gap-2">
             <Users size={20} className="text-[#00cfc1]" />
-            임직원 명단
+            인사 이동 대기 명단
+            <span className="text-xs bg-[#00cfc1]/10 text-[#020617] px-2 py-0.5 rounded-full font-bold">
+              {hrEvents.length}명
+            </span>
           </h3>
 
           <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
-            {employees.length > 0 ? (
-              employees.map((emp) => (
-                <div
-                  key={emp.id}
-                  onClick={() => setSelectedEmployee(emp)}
-                  className={`p-4 rounded-xl border transition-all duration-200 cursor-pointer ${
-                    selectedEmployee?.id === emp.id
+            {hrEvents.length > 0 ? (
+              hrEvents.map((event) => {
+                const emp = event.employees;
+                return (
+                  <div
+                    key={event.id}
+                    onClick={() => setSelectedEvent(event)}
+                    className={`p-4 rounded-xl border transition-all duration-200 cursor-pointer ${selectedEvent?.id === event.id
                       ? 'border-[#00cfc1] bg-[#00cfc1]/5 shadow-sm'
                       : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'
-                  }`}
-                >
-                  <p className="font-bold text-[#020617] text-sm">{emp.name}</p>
-                  <div className="text-xs text-gray-500 mt-2 space-y-1">
-                    <p>현재 부서: {emp.department}</p>
-                    <p>현재 직무: {emp.role_title}</p>
+                      }`}
+                  >
+                    <p className="font-bold text-[#020617] text-sm">{emp.name}</p>
+                    <div className="text-xs text-gray-500 mt-2 space-y-1">
+                      <p className="flex items-center gap-1">
+                        <span className="text-gray-400">현재:</span>
+                        <span>{emp.department} · {emp.role_title}</span>
+                      </p>
+                      <p className="flex items-center gap-1 text-blue-600 font-semibold">
+                        <ArrowRight size={12} />
+                        <span>이동: {event.details?.to_dept || '미정'} · {event.details?.to_role || '미정'}</span>
+                      </p>
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             ) : (
               <div className="py-16 text-center text-sm text-gray-400 border border-dashed border-gray-200 rounded-xl">
-                임직원 데이터가 없습니다.
+                대기 중인 인사 이동(부서이동) 건이 없습니다.
               </div>
             )}
           </div>
@@ -198,13 +236,13 @@ export default function TransferPage() {
 
         {/* 우측: 부서 이동 설정 폼 */}
         <div className="lg:col-span-2 space-y-6">
-          {selectedEmployee ? (
+          {selectedEvent ? (
             <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-6">
               <div className="border-b border-gray-100 pb-4">
                 <h3 className="text-xl font-bold text-[#020617]">
-                  {selectedEmployee.name} 사원 부서 이동 처리
+                  {selectedEvent.employees.name} 사원 부서 이동 처리
                 </h3>
-                <p className="text-xs text-gray-400 mt-1">현재: {selectedEmployee.department} ({selectedEmployee.role_title})</p>
+                <p className="text-xs text-gray-400 mt-1">현재: {selectedEvent.employees.department} ({selectedEvent.employees.role_title})</p>
               </div>
 
               {/* 새 부서 및 직무 입력 */}
@@ -251,16 +289,15 @@ export default function TransferPage() {
                             <p className="text-sm font-bold text-[#020617]">{asset.name}</p>
                             <p className="text-xs text-gray-400">S/N: {asset.serial_number} | 현재 위치: {asset.location || '-'}</p>
                           </div>
-                          
+
                           <div className="flex space-x-2">
                             <button
                               type="button"
                               onClick={() => handleToggleKeepAsset(asset.id)}
-                              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors border ${
-                                isKept
-                                  ? 'bg-emerald-50 text-emerald-600 border-emerald-200'
-                                  : 'bg-red-50 text-red-600 border-red-200'
-                              }`}
+                              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors border ${isKept
+                                ? 'bg-emerald-50 text-emerald-600 border-emerald-200'
+                                : 'bg-red-50 text-red-600 border-red-200'
+                                }`}
                             >
                               {isKept ? '새 부서로 유지' : '기존 부서 반납'}
                             </button>
@@ -283,7 +320,7 @@ export default function TransferPage() {
                   disabled={actionLoading !== null}
                   className="px-6 py-3 bg-[#00cfc1] hover:bg-[#00a89a] text-[#020617] font-bold rounded-lg transition-colors flex items-center gap-2 text-sm shadow-sm"
                 >
-                  {actionLoading === selectedEmployee.id ? (
+                  {actionLoading === selectedEvent.id ? (
                     <Loader2 className="animate-spin" size={16} />
                   ) : (
                     <>
@@ -300,7 +337,7 @@ export default function TransferPage() {
                 <RefreshCw size={28} />
               </div>
               <h3 className="text-base font-bold text-[#020617]">선택된 사원이 없습니다</h3>
-              <p className="text-sm text-gray-400 max-w-sm">좌측 임직원 명단에서 부서 이동 처리를 시작할 대상을 클릭해 주세요.</p>
+              <p className="text-sm text-gray-400 max-w-sm">좌측 인사 이동 대기 명단에서 부서 이동 처리를 시작할 대상을 클릭해 주세요.</p>
             </div>
           )}
         </div>

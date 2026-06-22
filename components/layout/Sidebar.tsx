@@ -26,7 +26,7 @@ const MENU_ITEMS = [
     subItems: [
       { name: '입사 자원 배부', path: '/dashboard/hr-events/onboarding' },
       { name: '퇴사 자원 회수', path: '/dashboard/hr-events/offboarding' },
-      { name: 'HR 정보 추가 지원 할당', path: '/dashboard/hr-events/transfer' },
+      { name: '인사 이동 자원관리', path: '/dashboard/hr-events/transfer' },
     ]
   },
   {
@@ -44,7 +44,7 @@ const MENU_ITEMS = [
     path: '/dashboard/saas',
     subItems: [
       { name: '사용 현황 및 등록', path: '/dashboard/saas/usage' },
-      { name: '계정 프로비저닝 관리', path: '/dashboard/saas/provisioning' },
+      { name: '계정 관리', path: '/dashboard/saas/provisioning' },
     ]
   },
   {
@@ -54,7 +54,7 @@ const MENU_ITEMS = [
     subItems: [
       { name: '내 자원 조회', path: '/dashboard/portal/my-resources' },
       { name: '자원 요청 및 반납', path: '/dashboard/portal/requests' },
-      { name: '자원 요청 관리 (관리자)', path: '/dashboard/portal/admin-requests' },
+      { name: '자원 요청 관리', path: '/dashboard/portal/admin-requests' },
     ]
   },
   {
@@ -66,7 +66,7 @@ const MENU_ITEMS = [
       { name: '계정 권한 설정', path: '/dashboard/settings/roles' },
       { name: '자원 템플릿 설정', path: '/dashboard/settings/templates' },
       { name: '동기화 로그 및 알림', path: '/dashboard/settings/logs' },
-      { name: '경고 및 알림 규칙 설정', path: '/dashboard/settings/rules' },
+      { name: '알림 규칙 설정', path: '/dashboard/settings/rules' },
     ]
   },
 ];

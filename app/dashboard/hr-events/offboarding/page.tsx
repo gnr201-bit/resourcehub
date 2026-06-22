@@ -3,34 +3,62 @@
 import React, { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Employee, Asset, SaasAccount } from '@/types/database.types';
-import { UserMinus, Check, AlertTriangle, Monitor, Shield, Loader2, Calendar } from 'lucide-react';
+import { UserMinus, Check, AlertTriangle, Monitor, Shield, Loader2, Calendar, CheckCircle } from 'lucide-react';
 
 export default function OffboardingPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [employees, setEmployees] = useState<Employee[]>([]);
-
+  
+  // Tab state: pending (대기) vs completed (회수 완료)
+  const [activeTab, setActiveTab] = useState<'pending' | 'completed'>('pending');
+  
+  // Lists
+  const [employees, setEmployees] = useState<Employee[]>([]); // pending
+  const [completedEmployees, setCompletedEmployees] = useState<Employee[]>([]); // completed
+  
   // Selection state
-  const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
+  const [selectedEmployee, setSelectedEmployee] = useState<any | null>(null);
   const [assignedAssets, setAssignedAssets] = useState<Asset[]>([]);
   const [saasAccounts, setSaasAccounts] = useState<SaasAccount[]>([]);
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      // 1. 퇴사 상태인 임직원 조회 (status = 'retired')
-      const { data: empData } = await supabase
-        .from('employees')
-        .select('*')
-        .eq('status', 'retired')
-        .order('name');
+      // 1. 퇴사 자원 회수가 미완료인 사원과 완료된 사원을 병렬로 조회
+      const [pendingResult, completedResult] = await Promise.all([
+        supabase
+          .from('employees')
+          .select('*, hr_events!inner(id, status, event_type, processed_at)')
+          .eq('status', 'retired')
+          .eq('hr_events.event_type', 'offboarding')
+          .neq('hr_events.status', 'completed')
+          .order('name'),
+        supabase
+          .from('employees')
+          .select('*, hr_events!inner(id, status, event_type, processed_at)')
+          .eq('status', 'retired')
+          .eq('hr_events.event_type', 'offboarding')
+          .eq('hr_events.status', 'completed')
+          .order('name')
+      ]);
 
-      setEmployees(empData || []);
+      const pendingData = pendingResult.data || [];
+      const completedData = completedResult.data || [];
 
-      if (empData && empData.length > 0 && !selectedEmployee) {
-        setSelectedEmployee(empData[0]);
-      } else if (empData && empData.length === 0) {
+      setEmployees(pendingData);
+      setCompletedEmployees(completedData);
+      
+      // 현재 활성화된 탭의 사원 목록 기준 선택 노출 조정
+      const currentList = activeTab === 'pending' ? pendingData : completedData;
+      
+      if (currentList.length > 0) {
+        // 이미 선택된 사원이 최신 리스트에 있는지 확인하여 유지하거나 첫 번째 사원 선택
+        const stillExists = selectedEmployee && currentList.some((emp: any) => emp.id === selectedEmployee.id);
+        if (!stillExists) {
+          setSelectedEmployee(currentList[0]);
+        }
+      } else {
         setSelectedEmployee(null);
       }
     } catch (err) {
@@ -42,7 +70,9 @@ export default function OffboardingPage() {
 
   const fetchEmployeeResources = async (empId: string) => {
     try {
-      // 2개의 쿼리를 병렬로 실행하여 패치 속도를 개선합니다.
+      // 회수 완료 탭의 직원은 이미 자산 상태가 unassigned이거나 계정이 inactive일 것이므로, 
+      // 이전에 배정되었던 이력을 확인하기 위해 status 조건 없이 조회하거나, 
+      // 현재 탭 상태에 맞춰 active인 것만 조회하여 깔끔하게 0개로 표시되도록 연동합니다.
       const [assetResult, saasResult] = await Promise.all([
         supabase
           .from('assets')
@@ -52,7 +82,7 @@ export default function OffboardingPage() {
           .from('saas_accounts')
           .select('*, saas_services!inner(id, name, used_licenses)')
           .eq('employee_id', empId)
-          .eq('status', 'active')
+          .eq('status', activeTab === 'pending' ? 'active' : 'inactive') // 대기 탭에선 활성 계정만, 완료 탭에선 회수한 계정 히스토리 조회
       ]);
 
       const assetData = assetResult.data;
@@ -69,6 +99,16 @@ export default function OffboardingPage() {
     fetchData();
   }, []);
 
+  // 탭 전환 시 선택된 사원 자동 조율
+  useEffect(() => {
+    const currentList = activeTab === 'pending' ? employees : completedEmployees;
+    if (currentList.length > 0) {
+      setSelectedEmployee(currentList[0]);
+    } else {
+      setSelectedEmployee(null);
+    }
+  }, [activeTab]);
+
   useEffect(() => {
     if (selectedEmployee) {
       fetchEmployeeResources(selectedEmployee.id);
@@ -83,18 +123,16 @@ export default function OffboardingPage() {
     if (!selectedEmployee) return;
     setActionLoading(assetId);
     try {
-      // 자산 상태를 'unassigned'로 변경하고 소유주 정보 비우기
       await supabase
         .from('assets')
         .update({
           status: 'unassigned',
           assigned_to: null,
           assigned_at: null,
-          location: 'IT자산고' // 회수 후 보관소 위치 설정
+          location: 'IT자산고'
         })
         .eq('id', assetId);
 
-      // 로그 기록
       await supabase
         .from('sync_logs')
         .insert({
@@ -108,18 +146,6 @@ export default function OffboardingPage() {
       await fetchEmployeeResources(selectedEmployee.id);
     } catch (err) {
       console.error('Asset recovery error:', err);
-      try {
-        await supabase
-          .from('sync_logs')
-          .insert({
-            log_type: 'asset_recovery',
-            status: 'error',
-            message: `${selectedEmployee?.name || '임직원'} 사원 자산 [${assetName}] 회수 실패`,
-            details: err instanceof Error ? err.message : String(err)
-          });
-      } catch (logErr) {
-        console.error('Failed to log recovery error:', logErr);
-      }
       alert('자산 회수 중 오류가 발생했습니다.');
     } finally {
       setActionLoading(null);
@@ -131,7 +157,6 @@ export default function OffboardingPage() {
     if (!selectedEmployee) return;
     setActionLoading(accountId);
     try {
-      // 1. SaaS 계정 상태를 'inactive'로 변경
       await supabase
         .from('saas_accounts')
         .update({
@@ -140,7 +165,6 @@ export default function OffboardingPage() {
         })
         .eq('id', accountId);
 
-      // 2. SaaS 라이선스 사용량 -1 감소
       await supabase
         .from('saas_services')
         .update({
@@ -148,7 +172,6 @@ export default function OffboardingPage() {
         })
         .eq('id', saasId);
 
-      // 로그 기록
       await supabase
         .from('sync_logs')
         .insert({
@@ -162,18 +185,6 @@ export default function OffboardingPage() {
       await fetchEmployeeResources(selectedEmployee.id);
     } catch (err) {
       console.error('SaaS revoke error:', err);
-      try {
-        await supabase
-          .from('sync_logs')
-          .insert({
-            log_type: 'saas_deprovisioning',
-            status: 'error',
-            message: `${selectedEmployee?.name || '임직원'} 사원 SaaS [${saasName}] 회수 실패`,
-            details: err instanceof Error ? err.message : String(err)
-          });
-      } catch (logErr) {
-        console.error('Failed to log revoke error:', logErr);
-      }
       alert('SaaS 계정 회수 중 오류가 발생했습니다.');
     } finally {
       setActionLoading(null);
@@ -186,13 +197,14 @@ export default function OffboardingPage() {
     setActionLoading('complete');
     try {
       // HR 이벤트 상태를 'completed'로 업데이트
-      await supabase
+      const { error: updateErr } = await supabase
         .from('hr_events')
         .update({ status: 'completed', processed_at: new Date().toISOString() })
         .eq('employee_id', selectedEmployee.id)
         .eq('event_type', 'offboarding');
 
-      // 로그 기록
+      if (updateErr) throw updateErr;
+
       await supabase
         .from('sync_logs')
         .insert({
@@ -202,29 +214,18 @@ export default function OffboardingPage() {
           details: `임직원 ID: ${selectedEmployee.id}`
         });
 
-      alert(`${selectedEmployee.name} 사원의 퇴사 자원 회수 절차가 완전히 종결되었습니다.`);
+      alert(`${selectedEmployee.name} 사원의 퇴사 자원 회수 절차가 완전히 종결되었습니다.\n(회수 완료 명단 탭에서 기록 조회가 가능합니다.)`);
       setSelectedEmployee(null);
       await fetchData();
     } catch (err) {
       console.error('Complete offboarding error:', err);
-      try {
-        await supabase
-          .from('sync_logs')
-          .insert({
-            log_type: 'offboarding_complete',
-            status: 'error',
-            message: `${selectedEmployee?.name || '임직원'} 사원의 퇴사 자원 회수 절차 최종 종결 중 오류 발생`,
-            details: err instanceof Error ? err.message : String(err)
-          });
-      } catch (logErr) {
-        console.error('Failed to log complete offboarding error:', logErr);
-      }
+      alert('최종 종결 처리 중 오류가 발생했습니다.');
     } finally {
       setActionLoading(null);
     }
   };
 
-  const isAllCleared = assignedAssets.length === 0 && saasAccounts.length === 0;
+  const isAllCleared = assignedAssets.length === 0 && saasAccounts.filter((a: any) => a.status === 'active').length === 0;
 
   if (loading) {
     return (
@@ -235,6 +236,8 @@ export default function OffboardingPage() {
     );
   }
 
+  const currentList = activeTab === 'pending' ? employees : completedEmployees;
+
   return (
     <div className="space-y-8">
       <div>
@@ -243,51 +246,78 @@ export default function OffboardingPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* 좌측: 퇴사 명단 */}
+        {/* 좌측: 퇴사 명단 (대기 / 완료 탭 분류) */}
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-4">
-          <h3 className="text-lg font-bold text-[#020617] flex items-center gap-2">
-            <UserMinus size={20} className="text-[#EF4444]" />
-            퇴사 처리 명단
-            <span className="text-xs bg-red-50 text-red-600 px-2 py-0.5 rounded-full font-bold">
-              {employees.length}명
-            </span>
-          </h3>
+          {/* 탭 인터페이스 */}
+          <div className="flex border-b border-gray-100">
+            <button
+              onClick={() => setActiveTab('pending')}
+              className={`flex-1 pb-3 text-center text-sm font-bold border-b-2 transition-all ${
+                activeTab === 'pending'
+                  ? 'border-red-500 text-red-600'
+                  : 'border-transparent text-gray-400 hover:text-gray-600'
+              }`}
+            >
+              회수 대기 ({employees.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('completed')}
+              className={`flex-1 pb-3 text-center text-sm font-bold border-b-2 transition-all ${
+                activeTab === 'completed'
+                  ? 'border-emerald-500 text-emerald-600'
+                  : 'border-transparent text-gray-400 hover:text-gray-600'
+              }`}
+            >
+              회수 완료 ({completedEmployees.length})
+            </button>
+          </div>
 
-          <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
-            {employees.length > 0 ? (
-              employees.map((emp) => (
+          <div className="space-y-2 max-h-[480px] overflow-y-auto pr-1">
+            {currentList.length > 0 ? (
+              currentList.map((emp) => (
                 <div
                   key={emp.id}
                   onClick={() => setSelectedEmployee(emp)}
-                  className={`p-4 rounded-xl border transition-all duration-200 cursor-pointer ${selectedEmployee?.id === emp.id
-                      ? 'border-red-400 bg-red-50/5 shadow-sm'
+                  className={`p-4 rounded-xl border transition-all duration-200 cursor-pointer ${
+                    selectedEmployee?.id === emp.id
+                      ? activeTab === 'pending' 
+                        ? 'border-red-400 bg-red-50/5 shadow-sm'
+                        : 'border-emerald-400 bg-emerald-50/5 shadow-sm'
                       : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'
-                    }`}
+                  }`}
                 >
                   <div className="flex justify-between items-start">
                     <p className="font-bold text-[#020617] text-sm">{emp.name}</p>
-                    <span className="text-xs px-2 py-0.5 bg-red-50 text-red-600 rounded font-medium">
-                      퇴사대기
+                    <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${
+                      activeTab === 'pending' ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'
+                    }`}>
+                      {activeTab === 'pending' ? '퇴사대기' : '종결완료'}
                     </span>
                   </div>
                   <div className="text-xs text-gray-500 mt-2 space-y-1">
-                    <p>부서: {emp.department}</p>
-                    <p>직무: {emp.role_title}</p>
+                    <p>부서: {emp.department || '미지정'}</p>
+                    <p>직무: {emp.role_title || '미지정'}</p>
                     <p className="flex items-center gap-1 text-gray-400">
                       <Calendar size={12} />
-                      퇴사일: {emp.retired_at ? new Date(emp.retired_at).toLocaleDateString() : '미정'}
+                      {activeTab === 'pending' 
+                        ? `퇴사일: ${emp.retired_at ? new Date(emp.retired_at).toLocaleDateString() : '미정'}`
+                        : `완료일: ${(emp as any).hr_events?.[0]?.processed_at ? new Date((emp as any).hr_events[0].processed_at).toLocaleDateString() : '미정'}`
+                      }
                     </p>
                   </div>
                 </div>
               ))
             ) : (
               <div className="py-16 text-center text-sm text-gray-400 border border-dashed border-gray-200 rounded-xl">
-                현재 진행 중인 퇴사 회수 건이 없습니다.
+                {activeTab === 'pending' 
+                  ? '현재 진행 중인 퇴사 회수 건이 없습니다.'
+                  : '처리 완료된 퇴사 자원 회수 건이 없습니다.'
+                }
               </div>
             )}
           </div>
         </div>
-
+ 
         {/* 우측: 회수 대상 자원 상세 목록 */}
         <div className="lg:col-span-2 space-y-6">
           {selectedEmployee ? (
@@ -295,15 +325,21 @@ export default function OffboardingPage() {
               <div className="border-b border-gray-100 pb-4 flex items-center justify-between">
                 <div>
                   <h3 className="text-xl font-bold text-[#020617]">
-                    {selectedEmployee.name} 사원 회수 현황
+                    {selectedEmployee.name} 사원 회수 현황 {activeTab === 'completed' && '(종결)'}
                   </h3>
-                  <p className="text-xs text-gray-400 mt-1">부서: {selectedEmployee.department} | 직무: {selectedEmployee.role_title}</p>
+                  <p className="text-xs text-gray-400 mt-1">부서: {selectedEmployee.department || '미지정'} | 직무: {selectedEmployee.role_title || '미지정'}</p>
                 </div>
 
-                {isAllCleared && (
-                  <span className="px-3 py-1 bg-emerald-50 text-emerald-600 text-xs font-bold rounded-full flex items-center gap-1">
-                    <Check size={14} /> 자원 회수 완료
+                {activeTab === 'completed' ? (
+                  <span className="px-3 py-1 bg-emerald-100 text-emerald-800 text-xs font-bold rounded-full flex items-center gap-1">
+                    <CheckCircle size={14} /> 종결 완료됨
                   </span>
+                ) : (
+                  isAllCleared && (
+                    <span className="px-3 py-1 bg-emerald-50 text-emerald-600 text-xs font-bold rounded-full flex items-center gap-1">
+                      <Check size={14} /> 자원 회수 완료
+                    </span>
+                  )
                 )}
               </div>
 
@@ -311,36 +347,52 @@ export default function OffboardingPage() {
               <div className="space-y-3">
                 <h4 className="text-sm font-bold text-[#020617] flex items-center gap-1.5">
                   <Monitor size={18} className="text-[#3B82F6]" />
-                  반납 대상 IT 자산 ({assignedAssets.length}건)
+                  {activeTab === 'pending' ? '반납 대상 IT 자산' : '회수 완료된 IT 자산'} ({assignedAssets.length}건)
                 </h4>
 
                 <div className="space-y-2">
                   {assignedAssets.length > 0 ? (
                     assignedAssets.map((asset) => (
-                      <div
-                        key={asset.id}
+                      <div 
+                        key={asset.id} 
                         className="p-4 border border-gray-100 rounded-xl flex items-center justify-between hover:bg-gray-50 transition-colors"
                       >
                         <div>
                           <p className="text-sm font-bold text-[#020617]">{asset.name}</p>
-                          <p className="text-xs text-gray-400">S/N: {asset.serial_number} | 사양: {asset.spec || '-'}</p>
+                          <p className="text-xs text-gray-400">
+                            S/N: {asset.serial_number} | 
+                            상태: <span className="font-semibold text-gray-600">{asset.status === 'unassigned' ? '회수완료(미배정)' : '지급중'}</span>
+                          </p>
                         </div>
-                        <button
-                          onClick={() => handleRecoverAsset(asset.id, asset.name)}
-                          disabled={actionLoading === asset.id}
-                          className="px-3 py-1.5 bg-[#EF4444] hover:bg-red-600 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1 disabled:opacity-50"
-                        >
-                          {actionLoading === asset.id ? (
-                            <Loader2 className="animate-spin" size={12} />
-                          ) : (
-                            '회수 처리'
-                          )}
-                        </button>
+                        
+                        {activeTab === 'pending' && (
+                          <button
+                            onClick={() => handleRecoverAsset(asset.id, asset.name)}
+                            disabled={actionLoading === asset.id || asset.status === 'unassigned'}
+                            className="px-3 py-1.5 bg-[#EF4444] hover:bg-red-600 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1 disabled:bg-emerald-50 disabled:text-emerald-600 disabled:opacity-100"
+                          >
+                            {actionLoading === asset.id ? (
+                              <Loader2 className="animate-spin" size={12} />
+                            ) : asset.status === 'unassigned' ? (
+                              <>
+                                <Check size={12} />
+                                회수 완료
+                              </>
+                            ) : (
+                              '회수 처리'
+                            )}
+                          </button>
+                        )}
+                        {activeTab === 'completed' && (
+                          <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1.5 rounded-lg border border-emerald-100/50">
+                            반납 완료 (IT자산고 보관)
+                          </span>
+                        )}
                       </div>
                     ))
                   ) : (
                     <div className="p-4 text-center text-xs text-emerald-600 bg-emerald-50/20 border border-dashed border-emerald-100 rounded-xl">
-                      반납이 필요한 IT 자산이 없습니다.
+                      반납 대상 IT 자산이 존재하지 않습니다.
                     </div>
                   )}
                 </div>
@@ -350,7 +402,7 @@ export default function OffboardingPage() {
               <div className="space-y-3">
                 <h4 className="text-sm font-bold text-[#020617] flex items-center gap-1.5">
                   <Shield size={18} className="text-[#84CC16]" />
-                  비활성화 대상 SaaS 계정 ({saasAccounts.length}건)
+                  {activeTab === 'pending' ? '비활성화 대상 SaaS 계정' : '비활성화(회수) 완료된 SaaS 계정'} ({saasAccounts.length}건)
                 </h4>
 
                 <div className="space-y-2">
@@ -359,40 +411,53 @@ export default function OffboardingPage() {
                       const saasName = (account as any).saas_services?.name || 'SaaS';
                       const saasId = (account as any).saas_services?.id;
                       const used = (account as any).saas_services?.used_licenses || 0;
-
+                      
                       return (
-                        <div
-                          key={account.id}
+                        <div 
+                          key={account.id} 
                           className="p-4 border border-gray-100 rounded-xl flex items-center justify-between hover:bg-gray-50 transition-colors"
                         >
                           <div>
                             <p className="text-sm font-bold text-[#020617]">{saasName}</p>
                             <p className="text-xs text-gray-400">계정 이메일: {account.email}</p>
                           </div>
-                          <button
-                            onClick={() => handleRevokeSaas(account.id, saasId, saasName, used)}
-                            disabled={actionLoading === account.id}
-                            className="px-3 py-1.5 bg-[#EF4444] hover:bg-red-600 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1 disabled:opacity-50"
-                          >
-                            {actionLoading === account.id ? (
-                              <Loader2 className="animate-spin" size={12} />
-                            ) : (
-                              '계정 회수'
-                            )}
-                          </button>
+                          
+                          {activeTab === 'pending' && (
+                            <button
+                              onClick={() => handleRevokeSaas(account.id, saasId, saasName, used)}
+                              disabled={actionLoading === account.id || account.status === 'inactive'}
+                              className="px-3 py-1.5 bg-[#EF4444] hover:bg-red-600 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1 disabled:bg-emerald-50 disabled:text-emerald-600 disabled:opacity-100"
+                            >
+                              {actionLoading === account.id ? (
+                                <Loader2 className="animate-spin" size={12} />
+                              ) : account.status === 'inactive' ? (
+                                <>
+                                  <Check size={12} />
+                                  비활성화 완료
+                                </>
+                              ) : (
+                                '계정 회수'
+                              )}
+                            </button>
+                          )}
+                          {activeTab === 'completed' && (
+                            <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1.5 rounded-lg border border-emerald-100/50">
+                              비활성화 완료
+                            </span>
+                          )}
                         </div>
                       );
                     })
                   ) : (
                     <div className="p-4 text-center text-xs text-emerald-600 bg-emerald-50/20 border border-dashed border-emerald-100 rounded-xl">
-                      활성 중인 SaaS 연동 계정이 없습니다.
+                      비활성화(회수)할 SaaS 연동 계정이 존재하지 않습니다.
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* 최종 종결 버튼 */}
-              {isAllCleared && (
+              {/* 최종 종결 버튼 (대기 탭의 모든 자원이 정리되었을 때만 노출) */}
+              {activeTab === 'pending' && isAllCleared && (
                 <div className="pt-4 border-t border-gray-100 flex justify-end">
                   <button
                     onClick={handleCompleteOffboarding}
@@ -405,6 +470,17 @@ export default function OffboardingPage() {
                       '퇴사 자원 회수 절차 최종 종결'
                     )}
                   </button>
+                </div>
+              )}
+
+              {/* 완료 탭 종결 메시지 안내 */}
+              {activeTab === 'completed' && (
+                <div className="p-4.5 bg-emerald-50/30 border border-emerald-100 rounded-xl flex items-center gap-3 text-xs text-emerald-800">
+                  <CheckCircle size={20} className="text-emerald-600 shrink-0" />
+                  <div>
+                    <p className="font-bold">퇴사 자원 회수 절차 완료</p>
+                    <p className="text-emerald-600 mt-1">본 임직원은 배정된 모든 IT 장비 반납 및 SaaS 계정 라이선스 차단 처리가 완료되어 최종 종결된 상태입니다.</p>
+                  </div>
                 </div>
               )}
             </div>

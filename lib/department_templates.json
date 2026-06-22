@@ -23,5 +23,15 @@
       "Slack",
       "Microsoft 365"
     ]
+  },
+  "마케팅팀": {
+    "default_asset_keyword": "",
+    "default_saas_names": [
+      "Jira Software",
+      "Microsoft 365",
+      "Figma",
+      "Slack",
+      "Zoom"
+    ]
   }
 }

@@ -228,3 +228,37 @@ VALUES
 ('asset_assignment', 'success', '자산 [MacBook Pro 14"] (S/N: SN-MAC-010)이(가) 최지우 사원에게 지급 완료되었습니다.', '{"action":"assign","asset_id":"SN-MAC-010","employee":"최지우"}'),
 ('transfer_adjustment', 'success', '정우성 사원의 부서 이동 처리 완료 (개발1팀 -> 개발2팀)', '{"employee":"정우성","from":"개발1팀","to":"개발2팀"}'),
 ('sync_hr', 'error', '레거시 HR API 동기화 과정에서 서버 타임아웃 오류가 발생했습니다. (재시도 예정)', 'Timeout of 5000ms exceeded during API fetch');
+
+-- 8. 가상 레거시 인사 데이터 테이블 (legacy_hr_employees)
+CREATE TABLE IF NOT EXISTS public.legacy_hr_employees (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    department TEXT NOT NULL,
+    role_title TEXT NOT NULL,
+    event_type TEXT NOT NULL CHECK (event_type IN ('onboarding', 'offboarding', 'transfer')),
+    event_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processed', 'error')),
+    details JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- RLS 활성화 및 전체 허용 정책 적용 (인증 없이 가상 데이터 등록/동기화 테스트를 지원하기 위함)
+ALTER TABLE public.legacy_hr_employees ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow all operations for legacy_hr_employees" ON public.legacy_hr_employees;
+CREATE POLICY "Allow all operations for legacy_hr_employees" 
+ON public.legacy_hr_employees 
+FOR ALL 
+TO public 
+USING (true) 
+WITH CHECK (true);
+
+-- 테스트용 초기 가상 인사 변동 데이터 삽입
+INSERT INTO public.legacy_hr_employees (name, email, department, role_title, event_type, event_date, status, details)
+VALUES 
+('아이유', 'iu@company.com', '개발2팀', '선임연구원', 'onboarding', '2026-07-01', 'pending', '{}'),
+('유재석', 'jaeseok@company.com', '개발1팀', '팀장', 'offboarding', '2026-06-18', 'pending', '{}'),
+('김철수', 'chulsoo@company.com', '개발1팀', '수석연구원', 'transfer', '2026-06-25', 'pending', '{"target_department": "IT운영팀", "target_role_title": "팀장"}')
+ON CONFLICT (email) DO NOTHING;
+

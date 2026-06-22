@@ -32,7 +32,7 @@ export default async function DashboardPage() {
     employeeCountResult,
     assetCountResult,
     saasDataResult,
-    criticalAssetsResult,
+    pendingOffboardingsResult,
     recentAssignmentsResult,
     assetCategoryResult,
     pendingRequestsResult
@@ -49,9 +49,10 @@ export default async function DashboardPage() {
       .from('saas_services')
       .select('id, name, total_licenses, used_licenses, warning_threshold, price_per_license, license_type, billing_cycle'),
     supabase
-      .from('assets')
-      .select('id, name, serial_number, assigned_at, employees!inner(name, department, status, retired_at)')
-      .eq('employees.status', 'retired'),
+      .from('hr_events')
+      .select('id, status, employee_id, employees!inner(id, name, department, retired_at, role_title)')
+      .eq('event_type', 'offboarding')
+      .neq('status', 'completed'),
     supabase
       .from('assets')
       .select('id, name, serial_number, assigned_at, employees(name, department)')
@@ -73,10 +74,27 @@ export default async function DashboardPage() {
   const employeeCount = employees.length;
   const assetCount = assetCountResult.count;
   const saasData = saasDataResult.data;
-  const criticalAssets = criticalAssetsResult.data;
+  const pendingOffboardings = pendingOffboardingsResult.data || [];
   const recentAssignments = recentAssignmentsResult.data;
   const assetCategoryData = assetCategoryResult.data;
   const pendingRequests = pendingRequestsResult.data;
+
+  // 퇴사 회수 대기 직원들의 미회수 자원(IT 자산 & SaaS 계정) 병렬 조회
+  const pendingEmpIds = pendingOffboardings.map((o: any) => o.employee_id);
+  const [pendingAssetsResult, pendingSaasResult] = await Promise.all([
+    supabase
+      .from('assets')
+      .select('id, name, serial_number, assigned_to, category')
+      .in('assigned_to', pendingEmpIds),
+    supabase
+      .from('saas_accounts')
+      .select('id, employee_id, email, saas_services!inner(name)')
+      .in('employee_id', pendingEmpIds)
+      .eq('status', 'active')
+  ]);
+
+  const pendingAssets = pendingAssetsResult.data || [];
+  const pendingSaas = pendingSaasResult.data || [];
 
   // 임직원 부서/직급 분포 계산
   const deptDistribution: Record<string, number> = {};
@@ -93,7 +111,7 @@ export default async function DashboardPage() {
     { name: '재직 임직원수 조회', error: employeeCountResult.error },
     { name: '배정 자산수 조회', error: assetCountResult.error },
     { name: 'SaaS 데이터 조회', error: saasDataResult.error },
-    { name: '퇴사자 미회수 자산 조회', error: criticalAssetsResult.error },
+    { name: '퇴사자 미회수 자산 조회', error: pendingOffboardingsResult.error },
     { name: '최근 자산 배정 현황 조회', error: recentAssignmentsResult.error },
     { name: 'IT 자산 카테고리 조회', error: assetCategoryResult.error },
     { name: '대기 중인 요청 조회', error: pendingRequestsResult.error }
@@ -132,17 +150,20 @@ export default async function DashboardPage() {
   }
   const saasUsageRate = totalLicenses > 0 ? Math.round((usedLicenses / totalLicenses) * 100) : 0;
 
-  const today = new Date();
-  const criticalAssetsFiltered = criticalAssets ? criticalAssets.filter(asset => {
-    const retiredAtStr = (asset.employees as any)?.retired_at;
-    if (!retiredAtStr) return true;
-    const retiredDate = new Date(retiredAtStr);
-    const diffTime = Math.abs(today.getTime() - retiredDate.getTime());
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    return diffDays >= retiredAssetWarningDays;
-  }) : [];
+  const criticalList = pendingOffboardings.map((o: any) => {
+    const emp = o.employees;
+    const empAssets = pendingAssets.filter((a: any) => a.assigned_to === emp.id);
+    const empSaas = pendingSaas.filter((s: any) => s.employee_id === emp.id);
+    return {
+      ...emp,
+      eventId: o.id,
+      eventDate: o.retired_at || emp.retired_at,
+      assets: empAssets,
+      saas: empSaas
+    };
+  });
 
-  const criticalCount = criticalAssetsFiltered.length;
+  const criticalCount = criticalList.length;
   const pendingRequestCount = pendingRequests?.length || 0;
 
   // IT 자산 카테고리별 통계 및 미배정(unassigned) 재고 계산
@@ -244,7 +265,7 @@ export default async function DashboardPage() {
           </Link>
 
           {/* 부서/직급 분포 팝오버 툴팁 */}
-          <div className="absolute left-0 bottom-full mb-2 hidden group-hover/tooltip:block bg-[#0f172a] text-white p-4 rounded-xl text-xs z-50 shadow-xl min-w-[240px] border border-gray-800 pointer-events-none">
+          <div className="absolute left-0 top-full mt-2 hidden group-hover/tooltip:block bg-[#0f172a] text-white p-4 rounded-xl text-xs z-50 shadow-xl min-w-[240px] border border-gray-800 pointer-events-none">
             <div className="space-y-3">
               <div>
                 <h4 className="font-bold text-[#00cfc1] border-b border-gray-850 pb-1 mb-1.5">부서별 분포</h4>
@@ -592,40 +613,66 @@ export default async function DashboardPage() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {criticalAssetsFiltered && criticalAssetsFiltered.length > 0 ? (
-              criticalAssetsFiltered.map((asset) => (
+            {criticalList && criticalList.length > 0 ? (
+              criticalList.map((emp) => (
                 <div
-                  key={asset.id}
-                  className="p-4 border border-red-100 bg-red-50/5 rounded-xl hover:bg-red-50/20 transition-all cursor-pointer space-y-2.5 flex flex-col justify-between"
+                  key={emp.id}
+                  className="p-4 border border-red-100 bg-red-50/5 rounded-xl hover:bg-red-50/20 transition-all cursor-pointer space-y-3 flex flex-col justify-between"
                 >
-                  <div className="space-y-2">
+                  <div className="space-y-2.5">
                     <div className="flex justify-between items-start">
-                      <p className="text-sm font-bold text-[#020617] truncate max-w-[150px]">{asset.name}</p>
+                      <div className="flex items-center gap-1.5">
+                        <EmployeeResourcesModal
+                          employeeId={emp.id}
+                          employeeName={emp.name}
+                          employeeDept={emp.department}
+                          employeeRole={emp.role_title}
+                        />
+                        <span className="text-xs text-gray-400">({emp.department || '미지정'})</span>
+                      </div>
                       <span className="text-[10px] text-[#EF4444] bg-red-50 px-2 py-0.5 rounded-full font-semibold shrink-0">
-                        회수 대상
+                        회수 대기
                       </span>
                     </div>
-                    <div className="text-xs text-gray-500 space-y-1">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-gray-400">퇴사자:</span>
-                        {(asset.employees as any) ? (
-                          <EmployeeResourcesModal
-                            employeeId={(asset.employees as any).id}
-                            employeeName={(asset.employees as any).name}
-                            employeeDept={(asset.employees as any).department}
-                            employeeRole={(asset.employees as any).role_title}
-                          />
-                        ) : (
-                          <span>알수없음</span>
-                        )}
-                        <span className="text-gray-400">({(asset.employees as any)?.department || '-'})</span>
-                      </div>
-                      <p className="flex items-center gap-1 text-gray-400 mt-1">
+
+                    <div className="text-xs text-gray-505 space-y-2">
+                      <p className="flex items-center gap-1 text-gray-400">
                         <Calendar size={12} />
-                        퇴사일: {(asset.employees as any)?.retired_at ? new Date((asset.employees as any).retired_at).toLocaleDateString() : '-'}
+                        퇴사일: {emp.eventDate ? new Date(emp.eventDate).toLocaleDateString() : '미정'}
                       </p>
+
+                      {/* 미회수 IT 자산 목록 */}
+                      {emp.assets && emp.assets.length > 0 ? (
+                        <div className="space-y-1 bg-blue-50/20 p-2 rounded-lg border border-blue-100/50">
+                          <div className="flex items-center gap-1 text-[10px] font-bold text-blue-600">
+                            <Monitor size={10} />
+                            <span>IT 자산 ({emp.assets.length}대)</span>
+                          </div>
+                          <p className="text-[11px] text-gray-600 truncate">
+                            {emp.assets.map((a: any) => a.name).join(', ')}
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-[10px] text-gray-400 italic">반납할 IT 자산 없음</p>
+                      )}
+
+                      {/* 미회수 소프트웨어(SaaS) 목록 */}
+                      {emp.saas && emp.saas.length > 0 ? (
+                        <div className="space-y-1 bg-emerald-50/20 p-2 rounded-lg border border-emerald-100/50">
+                          <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-600">
+                            <Cloud size={10} />
+                            <span>소프트웨어 ({emp.saas.length}개)</span>
+                          </div>
+                          <p className="text-[11px] text-gray-600 truncate">
+                            {emp.saas.map((s: any) => s.saas_services?.name).join(', ')}
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-[10px] text-gray-400 italic">회수할 소프트웨어 없음</p>
+                      )}
                     </div>
                   </div>
+
                   <div className="pt-2 border-t border-dashed border-red-100 flex justify-end">
                     <Link
                       href="/dashboard/hr-events/offboarding"
@@ -638,7 +685,7 @@ export default async function DashboardPage() {
               ))
             ) : (
               <div className="col-span-2 py-12 text-center text-sm text-gray-400 border border-dashed border-gray-200 rounded-xl">
-                주의 또는 미회수 자산이 없습니다.
+                주의 또는 미회수 자원이 없습니다.
               </div>
             )}
           </div>
