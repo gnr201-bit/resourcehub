@@ -262,3 +262,26 @@ VALUES
 ('김철수', 'chulsoo@company.com', '개발1팀', '수석연구원', 'transfer', '2026-06-25', 'pending', '{"target_department": "IT운영팀", "target_role_title": "팀장"}')
 ON CONFLICT (email) DO NOTHING;
 
+
+-- 9. 시스템 설정 테이블 (system_settings)
+CREATE TABLE IF NOT EXISTS public.system_settings (
+    key TEXT PRIMARY KEY,
+    value JSONB NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+ALTER TABLE public.system_settings ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow all operations for system_settings" ON public.system_settings;
+CREATE POLICY "Allow all operations for system_settings" 
+ON public.system_settings 
+FOR ALL 
+TO public 
+USING (true) 
+WITH CHECK (true);
+
+INSERT INTO public.system_settings (key, value)
+VALUES ('warning_rules', '{"retiredAssetWarningDays": 3, "assetStockThreshold": 3}'::jsonb)
+ON CONFLICT (key) DO NOTHING;
+
+

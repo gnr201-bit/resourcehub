@@ -15,17 +15,25 @@ export default async function DashboardLayout({
     redirect('/login');
   }
 
-  // 관리자 여부 확인
+  // 사용자 성명 및 관리자 여부 확인
+  let userName = '시스템 관리자';
   let isAdmin = false;
+
   if (user.email === 'admin@company.com') {
     isAdmin = true;
   } else {
     const { data: employee } = await supabase
       .from('employees')
-      .select('role_title')
+      .select('name, role_title')
       .eq('email', user.email)
-      .single();
-    isAdmin = !!(employee && (employee.role_title === '시스템관리자' || employee.role_title.includes('관리자')));
+      .maybeSingle();
+
+    if (employee) {
+      userName = employee.name;
+      isAdmin = !!(employee.role_title === '시스템관리자' || employee.role_title.includes('관리자'));
+    } else {
+      userName = user.email?.split('@')[0] || '사용자';
+    }
   }
 
   return (
@@ -37,9 +45,12 @@ export default async function DashboardLayout({
             {isAdmin ? '관리자 워크스페이스' : '직원 포털'}
           </h2>
           <div className="flex items-center space-x-4">
-            <span className="text-sm text-gray-600">{user.email}</span>
+            <span className="text-sm text-gray-600 font-medium">
+              <span className="text-[#00cfc1] font-bold">{userName}</span> 님, 오늘도 활기찬 하루 되세요
+            </span>
           </div>
         </header>
+
         <div className="p-8 overflow-y-auto">{children}</div>
       </main>
     </div>

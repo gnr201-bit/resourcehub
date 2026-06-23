@@ -184,7 +184,7 @@ export default function TransferPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-3xl font-bold text-[#020617] tracking-tight">인사 이동 자원 관리</h1>
+        <h1 className="text-3xl font-bold text-[#020617] tracking-tight">부서 이동 자원관리</h1>
         <p className="text-gray-500 mt-2 text-base">직원의 부서 이동 또는 정기 인사에 따라 직급 및 부서에 맞게 기존 지급 장비를 회수하거나 새로운 표준 자원으로 지원 및 할당합니다.</p>
       </div>
 

@@ -1,26 +1,29 @@
 import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
+import { createClient } from '@/lib/supabase/server';
 
-const settingsFilePath = path.join(process.cwd(), 'lib', 'settings.json');
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    if (!fs.existsSync(settingsFilePath)) {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from('system_settings')
+      .select('value')
+      .eq('key', 'warning_rules')
+      .maybeSingle();
+
+    if (error || !data) {
+      // system_settings 테이블이 아직 생성되지 않았거나 데이터가 없는 경우 기본값 반환
       const defaultSettings = {
         retiredAssetWarningDays: 3,
         assetStockThreshold: 3
       };
-      fs.mkdirSync(path.dirname(settingsFilePath), { recursive: true });
-      fs.writeFileSync(settingsFilePath, JSON.stringify(defaultSettings, null, 2), 'utf-8');
       return NextResponse.json(defaultSettings);
     }
 
-    const fileContent = fs.readFileSync(settingsFilePath, 'utf-8');
-    const settings = JSON.parse(fileContent);
-    return NextResponse.json(settings);
+    return NextResponse.json(data.value);
   } catch (err) {
-    console.error('Failed to read settings:', err);
+    console.error('Failed to read settings from DB:', err);
     return NextResponse.json({ error: 'Failed to read settings' }, { status: 500 });
   }
 }
@@ -39,8 +42,21 @@ export async function POST(request: Request) {
       assetStockThreshold
     };
 
-    fs.mkdirSync(path.dirname(settingsFilePath), { recursive: true });
-    fs.writeFileSync(settingsFilePath, JSON.stringify(updatedSettings, null, 2), 'utf-8');
+    const supabase = await createClient();
+    
+    // upsert 수행
+    const { error } = await supabase
+      .from('system_settings')
+      .upsert({
+        key: 'warning_rules',
+        value: updatedSettings,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'key' });
+
+    if (error) {
+      console.error('DB settings save error:', error);
+      return NextResponse.json({ error: 'Failed to save settings to DB' }, { status: 500 });
+    }
 
     return NextResponse.json({ success: true, settings: updatedSettings });
   } catch (err) {

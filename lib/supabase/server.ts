@@ -33,38 +33,42 @@ export async function createClient() {
 
 export async function checkAdminOrRedirect() {
   const supabase = await createClient();
+  let user = null;
+  let isAdmin = false;
+  let isLoginRequired = false;
   
   try {
-    const { data: { user }, error } = await supabase.auth.getUser();
+    const { data: { user: currentUser }, error } = await supabase.auth.getUser();
 
-    if (error) {
-      console.error('getUser error in checkAdminOrRedirect:', error);
+    if (error || !currentUser) {
+      isLoginRequired = true;
+    } else {
+      user = currentUser;
+      if (user.email === 'admin@company.com') {
+        isAdmin = true;
+      } else {
+        const { data: employee } = await supabase
+          .from('employees')
+          .select('role_title')
+          .eq('email', user.email)
+          .maybeSingle();
+
+        isAdmin = !!(employee && (employee.role_title === '시스템관리자' || employee.role_title.includes('관리자')));
+      }
     }
-
-    if (!user) {
-      redirect('/login');
-    }
-
-    if (user.email === 'admin@company.com') {
-      return user;
-    }
-
-    const { data: employee } = await supabase
-      .from('employees')
-      .select('role_title')
-      .eq('email', user.email)
-      .single();
-
-    const isAdmin = employee && (employee.role_title === '시스템관리자' || employee.role_title.includes('관리자'));
-
-    if (!isAdmin) {
-      redirect('/dashboard/portal/my-resources');
-    }
-
-    return user;
   } catch (err) {
-    console.error('Catch error in checkAdminOrRedirect:', err);
+    console.error('Catch error in checkAdminOrRedirect check:', err);
+    isLoginRequired = true;
+  }
+
+  if (isLoginRequired) {
     redirect('/login');
   }
+
+  if (!isAdmin) {
+    redirect('/dashboard/portal/my-resources');
+  }
+
+  return user;
 }
 

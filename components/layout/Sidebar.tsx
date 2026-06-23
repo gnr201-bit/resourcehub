@@ -20,17 +20,17 @@ import { createClient } from '@/lib/supabase/client';
 const MENU_ITEMS = [
   { name: '통합 대시보드', icon: LayoutDashboard, path: '/dashboard' },
   {
-    name: '인적자원 관리',
+    name: '자원 배부 관리',
     icon: Users,
     path: '/dashboard/hr-events',
     subItems: [
       { name: '입사 자원 배부', path: '/dashboard/hr-events/onboarding' },
       { name: '퇴사 자원 회수', path: '/dashboard/hr-events/offboarding' },
-      { name: '인사 이동 자원관리', path: '/dashboard/hr-events/transfer' },
+      { name: '부서 이동 자원관리', path: '/dashboard/hr-events/transfer' },
     ]
   },
   {
-    name: 'IT 자산 관리',
+    name: '유형자산 관리',
     icon: Server,
     path: '/dashboard/assets',
     subItems: [
@@ -39,7 +39,7 @@ const MENU_ITEMS = [
     ]
   },
   {
-    name: '소프트웨어 현황',
+    name: '소프트웨어 관리',
     icon: Cloud,
     path: '/dashboard/saas',
     subItems: [
@@ -78,6 +78,7 @@ export default function Sidebar() {
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   const [userEmail, setUserEmail] = useState<string>('');
   const [userName, setUserName] = useState<string>('');
+  const [userDept, setUserDept] = useState<string>('');
   const [userRoleTitle, setUserRoleTitle] = useState<string>('');
 
   useEffect(() => {
@@ -93,20 +94,22 @@ export default function Sidebar() {
           setIsAdmin(true);
           setUserEmail('admin@company.com');
           setUserName('시스템 관리자');
+          setUserDept('IT운영팀');
           setUserRoleTitle('시스템관리자');
           return;
         }
 
         const { data: employee } = await supabase
           .from('employees')
-          .select('name, role_title')
+          .select('name, department, role_title')
           .eq('email', user.email)
-          .single();
+          .maybeSingle();
 
         const isUserAdmin = employee && (employee.role_title === '시스템관리자' || employee.role_title.includes('관리자'));
         setIsAdmin(!!isUserAdmin);
         setUserEmail(user.email || '');
         setUserName(employee?.name || user.email?.split('@')[0] || '사용자');
+        setUserDept(employee?.department || '');
         setUserRoleTitle(employee?.role_title || '임직원');
       } catch (err) {
         console.error('Role check error:', err);
@@ -147,12 +150,36 @@ export default function Sidebar() {
     );
   }
 
-  // 일반 직원은 '직원 포털'의 '내 자원 조회', '자원 요청 및 반납'만 노출
+  // 메뉴 필터링 규칙 적용
   const filteredMenuItems = MENU_ITEMS.map(item => {
+    // 1. 시스템 관리자 계정: 전체 메뉴 노출
     if (isAdmin) {
       return item;
     }
 
+    // 2. IT운영팀: 유형자산 관리, 직원 포털 메뉴 노출
+    if (userDept === 'IT운영팀') {
+      if (item.name === '유형자산 관리' || item.name === '직원 포털') {
+        return item;
+      }
+      return null;
+    }
+
+    // 3. 인사팀: 직원 포털 (자원 요청 관리 제외), 자원 배부 관리 메뉴 노출
+    if (userDept === '인사팀') {
+      if (item.name === '자원 배부 관리') {
+        return item;
+      }
+      if (item.name === '직원 포털') {
+        return {
+          ...item,
+          subItems: item.subItems?.filter(sub => sub.name !== '자원 요청 관리 (관리자)')
+        };
+      }
+      return null;
+    }
+
+    // 4. 그 외 일반 부서 계정: 직원 포털 (자원 요청 관리 제외) 노출
     if (item.name === '직원 포털') {
       return {
         ...item,

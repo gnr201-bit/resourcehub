@@ -48,7 +48,7 @@ export default function RulesPage() {
       });
 
       if (res.ok) {
-        setStatusMsg({ type: 'success', text: '경고 및 알림 규칙 설정이 성공적으로 저장되었습니다.' });
+        setStatusMsg({ type: 'success', text: '알림 규칙 설정이 성공적으로 저장되었습니다.' });
         setTimeout(() => setStatusMsg(null), 3000);
       } else {
         setStatusMsg({ type: 'error', text: '설정 저장에 실패했습니다. 올바른 값을 입력해 주세요.' });
@@ -73,7 +73,7 @@ export default function RulesPage() {
   return (
     <div className="space-y-8 max-w-4xl">
       <div>
-        <h1 className="text-3xl font-bold text-[#020617] tracking-tight">경고 및 알림 규칙 설정</h1>
+        <h1 className="text-3xl font-bold text-[#020617] tracking-tight">알림 규칙 설정</h1>
         <p className="text-gray-500 mt-2 text-base">퇴사자 자원 회수 경고 기준일 및 IT 자산 재고 알림 임계값을 관리하고 변경합니다.</p>
       </div>
 

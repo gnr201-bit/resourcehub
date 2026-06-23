@@ -13,18 +13,22 @@ export default async function DashboardPage() {
   await checkAdminOrRedirect();
   const supabase = await createClient();
 
-  // lib/settings.json에서 동적 설정값 로드 (P2 기능)
+  // Supabase system_settings 테이블에서 알림 규칙 설정값 로드
   let retiredAssetWarningDays = 3;
   let assetStockThreshold = 3;
   try {
-    const settingsPath = path.join(process.cwd(), 'lib', 'settings.json');
-    if (fs.existsSync(settingsPath)) {
-      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
-      retiredAssetWarningDays = settings.retiredAssetWarningDays ?? 3;
-      assetStockThreshold = settings.assetStockThreshold ?? 3;
+    const { data: settingsData } = await supabase
+      .from('system_settings')
+      .select('value')
+      .eq('key', 'warning_rules')
+      .maybeSingle();
+
+    if (settingsData && settingsData.value) {
+      retiredAssetWarningDays = settingsData.value.retiredAssetWarningDays ?? 3;
+      assetStockThreshold = settingsData.value.assetStockThreshold ?? 3;
     }
   } catch (err) {
-    console.error('Failed to read settings from json in page:', err);
+    console.error('Failed to read settings from Supabase:', err);
   }
 
   // 7개의 쿼리를 병렬(동시)로 실행하여 속도를 대폭 개선합니다.
@@ -247,8 +251,9 @@ export default async function DashboardPage() {
 
       {/* 메트릭 카드 영역 (4열 그리드) */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <div className="relative group/tooltip">
-          <Link href="/dashboard/settings/hr-sync" className="block">
+        {/* 1. 재직 중 임직원 */}
+        <div className="relative group/tooltip h-full">
+          <Link href="/dashboard/settings/hr-sync" className="block h-full">
             <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm hover:border-[#00cfc1]/50 hover:shadow-md transition-all duration-200 cursor-pointer h-full">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-sm font-semibold text-gray-500 hover:text-[#00cfc1] transition-colors">재직 중 임직원</h3>
@@ -293,84 +298,93 @@ export default async function DashboardPage() {
           </div>
         </div>
 
-        <Link href="/dashboard/assets/inventory" className="block group">
-          <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm hover:border-[#3B82F6]/50 hover:shadow-md transition-all duration-200 cursor-pointer h-full">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold text-gray-500 group-hover:text-[#3B82F6] transition-colors">배정된 IT 자산</h3>
-              <div className="p-2 bg-blue-50 rounded-lg group-hover:bg-blue-100 transition-colors">
-                <Monitor className="text-[#3B82F6]" size={20} />
+        {/* 2. 배정된 유형자산 (메뉴명 반영) */}
+        <div className="h-full">
+          <Link href="/dashboard/assets/inventory" className="block h-full group">
+            <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm hover:border-[#3B82F6]/50 hover:shadow-md transition-all duration-200 cursor-pointer h-full">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold text-gray-500 group-hover:text-[#3B82F6] transition-colors">배정된 유형자산</h3>
+                <div className="p-2 bg-blue-50 rounded-lg group-hover:bg-blue-100 transition-colors">
+                  <Monitor className="text-[#3B82F6]" size={20} />
+                </div>
               </div>
-            </div>
-            <div className="flex items-baseline">
-              <p className="text-3xl font-bold text-[#020617]">{assignedAssetsCount || 0}</p>
-              <span className="text-sm font-normal text-gray-400 ml-1">/ {totalAssetsCount || 0} 대</span>
-              <span className="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full ml-3 font-semibold">{assetUsageRate}%</span>
-            </div>
+              <div className="flex items-baseline">
+                <p className="text-3xl font-bold text-[#020617]">{assignedAssetsCount || 0}</p>
+                <span className="text-sm font-normal text-gray-400 ml-1">/ {totalAssetsCount || 0} 대</span>
+                <span className="text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full ml-3 font-semibold">{assetUsageRate}%</span>
+              </div>
 
-            {/* 자산 사용률 프로그레스 바 */}
-            <div className="mt-4 space-y-1">
-              <div className="w-full bg-gray-100 rounded-full h-1.5">
-                <div
-                  className="bg-[#3B82F6] h-1.5 rounded-full transition-all duration-500"
-                  style={{ width: `${assetUsageRate}%` }}
-                ></div>
+              {/* 자산 사용률 프로그레스 바 */}
+              <div className="mt-4 space-y-1">
+                <div className="w-full bg-gray-100 rounded-full h-1.5">
+                  <div
+                    className="bg-[#3B82F6] h-1.5 rounded-full transition-all duration-500"
+                    style={{ width: `${assetUsageRate}%` }}
+                  ></div>
+                </div>
               </div>
             </div>
-          </div>
-        </Link>
+          </Link>
+        </div>
 
-        <Link href="/dashboard/saas/usage" className="block group">
-          <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm hover:border-[#84CC16]/50 hover:shadow-md transition-all duration-200 cursor-pointer h-full">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold text-gray-500 group-hover:text-[#84CC16] transition-colors">SaaS 월 구독 비용</h3>
-              <div className="p-2 bg-emerald-50 rounded-lg group-hover:bg-emerald-100 transition-colors">
-                <Cloud className="text-[#84CC16]" size={20} />
+        {/* 3. SaaS 월 구독 비용 */}
+        <div className="h-full">
+          <Link href="/dashboard/saas/usage" className="block h-full group">
+            <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm hover:border-[#84CC16]/50 hover:shadow-md transition-all duration-200 cursor-pointer h-full">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold text-gray-500 group-hover:text-[#84CC16] transition-colors">SaaS 월 구독 비용</h3>
+                <div className="p-2 bg-emerald-50 rounded-lg group-hover:bg-emerald-100 transition-colors">
+                  <Cloud className="text-[#84CC16]" size={20} />
+                </div>
               </div>
-            </div>
-            <div className="flex items-baseline">
-              <p className="text-3xl font-bold text-[#020617]">{totalMonthlyCost.toLocaleString()}</p>
-              <span className="text-sm font-normal text-gray-400 ml-1">원</span>
-            </div>
+              <div className="flex items-baseline">
+                <p className="text-3xl font-bold text-[#020617]">{totalMonthlyCost.toLocaleString()}</p>
+                <span className="text-sm font-normal text-gray-400 ml-1">원</span>
+              </div>
 
-            {/* 실사용 비용 vs 최대 예상 비용 표시 */}
-            <div className="mt-3 space-y-1.5">
-              <div className="flex justify-between text-xs text-gray-400">
-                <span>최대 예상 비용 (한도)</span>
-                <span className="font-semibold text-gray-600">{maxMonthlyCost.toLocaleString()}원</span>
-              </div>
-              <div className="flex justify-between text-xs text-gray-400">
-                <span>라이선스 사용률</span>
-                <span className="font-semibold text-gray-600">{saasUsageRate}%</span>
-              </div>
-              <div className="w-full bg-gray-100 rounded-full h-1.5">
-                <div
-                  className="bg-[#84CC16] h-1.5 rounded-full transition-all duration-500"
-                  style={{ width: `${saasUsageRate}%` }}
-                ></div>
+              {/* 실사용 비용 vs 최대 예상 비용 표시 */}
+              <div className="mt-3 space-y-1.5">
+                <div className="flex justify-between text-xs text-gray-400">
+                  <span>최대 예상 비용 (한도)</span>
+                  <span className="font-semibold text-gray-600">{maxMonthlyCost.toLocaleString()}원</span>
+                </div>
+                <div className="flex justify-between text-xs text-gray-400">
+                  <span>라이선스 사용률</span>
+                  <span className="font-semibold text-gray-600">{saasUsageRate}%</span>
+                </div>
+                <div className="w-full bg-gray-100 rounded-full h-1.5">
+                  <div
+                    className="bg-[#84CC16] h-1.5 rounded-full transition-all duration-500"
+                    style={{ width: `${saasUsageRate}%` }}
+                  ></div>
+                </div>
               </div>
             </div>
-          </div>
-        </Link>
+          </Link>
+        </div>
 
-        <Link href="/dashboard/hr-events/offboarding" className="block group">
-          <div className={`p-6 rounded-xl border relative overflow-hidden transition-all duration-200 hover:shadow-md h-full cursor-pointer ${criticalCount > 0 ? 'border-red-200 bg-red-50/10 hover:border-[#EF4444]/50' : 'border-gray-100 hover:border-gray-300'
-            }`}>
-            {criticalCount > 0 && <div className="absolute top-0 left-0 w-1.5 h-full bg-[#EF4444]"></div>}
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold text-gray-500 group-hover:text-[#EF4444] transition-colors">퇴사자 미회수 자산</h3>
-              <div className={`p-2 rounded-lg ${criticalCount > 0 ? 'bg-red-50 group-hover:bg-red-100' : 'bg-gray-50 group-hover:bg-gray-100'} transition-colors`}>
-                <AlertTriangle className={criticalCount > 0 ? 'text-[#EF4444]' : 'text-gray-400'} size={20} />
+        {/* 4. 퇴사자 미회수 자산 */}
+        <div className="h-full">
+          <Link href="/dashboard/hr-events/offboarding" className="block h-full group">
+            <div className={`p-6 rounded-xl border relative overflow-hidden transition-all duration-200 hover:shadow-md h-full cursor-pointer ${criticalCount > 0 ? 'border-red-200 bg-red-50/10 hover:border-[#EF4444]/50' : 'border-gray-100 hover:border-gray-300'
+              }`}>
+              {criticalCount > 0 && <div className="absolute top-0 left-0 w-1.5 h-full bg-[#EF4444]"></div>}
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold text-gray-500 group-hover:text-[#EF4444] transition-colors">퇴사자 미회수 자산</h3>
+                <div className={`p-2 rounded-lg ${criticalCount > 0 ? 'bg-red-50 group-hover:bg-red-100' : 'bg-gray-50 group-hover:bg-gray-100'} transition-colors`}>
+                  <AlertTriangle className={criticalCount > 0 ? 'text-[#EF4444]' : 'text-gray-400'} size={20} />
+                </div>
               </div>
+              <div className="flex items-baseline">
+                <p className={`text-3xl font-bold ${criticalCount > 0 ? 'text-[#EF4444]' : 'text-[#020617]'}`}>
+                  {criticalCount}
+                </p>
+                <span className="text-sm font-normal text-gray-400 ml-1">건</span>
+              </div>
+              <p className="text-xs text-gray-400 mt-2 flex items-center gap-1">즉시 회수 처리가 필요합니다 <ArrowRight size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" /></p>
             </div>
-            <div className="flex items-baseline">
-              <p className={`text-3xl font-bold ${criticalCount > 0 ? 'text-[#EF4444]' : 'text-[#020617]'}`}>
-                {criticalCount}
-              </p>
-              <span className="text-sm font-normal text-gray-400 ml-1">건</span>
-            </div>
-            <p className="text-xs text-gray-400 mt-2 flex items-center gap-1">즉시 회수 처리가 필요합니다 <ArrowRight size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" /></p>
-          </div>
-        </Link>
+          </Link>
+        </div>
       </div>
 
       {/* 상세 영역 1 */}
