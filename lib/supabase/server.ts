@@ -72,3 +72,95 @@ export async function checkAdminOrRedirect() {
   return user;
 }
 
+export async function checkAssetPermissionOrRedirect() {
+  const supabase = await createClient();
+  let user = null;
+  let hasPermission = false;
+  let isLoginRequired = false;
+  
+  try {
+    const { data: { user: currentUser }, error } = await supabase.auth.getUser();
+
+    if (error || !currentUser) {
+      isLoginRequired = true;
+    } else {
+      user = currentUser;
+      if (user.email === 'admin@company.com') {
+        hasPermission = true;
+      } else {
+        const { data: employee } = await supabase
+          .from('employees')
+          .select('department, role_title')
+          .eq('email', user.email)
+          .maybeSingle();
+
+        const isAdmin = employee && (employee.role_title === '시스템관리자' || employee.role_title.includes('관리자'));
+        const isITTeam = employee && employee.department === 'IT운영팀';
+        
+        if (isAdmin || isITTeam) {
+          hasPermission = true;
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Catch error in checkAssetPermission check:', err);
+    isLoginRequired = true;
+  }
+
+  if (isLoginRequired) {
+    redirect('/login');
+  }
+
+  if (!hasPermission) {
+    redirect('/dashboard/portal/my-resources');
+  }
+
+  return user;
+}
+
+export async function checkHRPermissionOrRedirect() {
+  const supabase = await createClient();
+  let user = null;
+  let hasPermission = false;
+  let isLoginRequired = false;
+  
+  try {
+    const { data: { user: currentUser }, error } = await supabase.auth.getUser();
+
+    if (error || !currentUser) {
+      isLoginRequired = true;
+    } else {
+      user = currentUser;
+      if (user.email === 'admin@company.com') {
+        hasPermission = true;
+      } else {
+        const { data: employee } = await supabase
+          .from('employees')
+          .select('department, role_title')
+          .eq('email', user.email)
+          .maybeSingle();
+
+        const isAdmin = employee && (employee.role_title === '시스템관리자' || employee.role_title.includes('관리자'));
+        const isHRTeam = employee && employee.department === '인사팀';
+        
+        if (isAdmin || isHRTeam) {
+          hasPermission = true;
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Catch error in checkHRPermission check:', err);
+    isLoginRequired = true;
+  }
+
+  if (isLoginRequired) {
+    redirect('/login');
+  }
+
+  if (!hasPermission) {
+    redirect('/dashboard/portal/my-resources');
+  }
+
+  return user;
+}
+

@@ -1,11 +1,11 @@
 import React from 'react';
-import { checkAdminOrRedirect } from '@/lib/supabase/server';
+import { checkHRPermissionOrRedirect } from '@/lib/supabase/server';
 
 export default async function HrEventsLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  await checkAdminOrRedirect();
+  await checkHRPermissionOrRedirect();
   return <>{children}</>;
 }
