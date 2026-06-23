@@ -1,32 +1,70 @@
 import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
+import { createClient } from '@/lib/supabase/server';
 
-const getFilePath = () => path.join(process.cwd(), 'lib', 'department_templates.json');
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const filePath = getFilePath();
-    if (!fs.existsSync(filePath)) {
-      // 파일이 없을 경우 빈 객체 기본 생성
-      fs.writeFileSync(filePath, JSON.stringify({}), 'utf-8');
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from('system_settings')
+      .select('value')
+      .eq('key', 'department_templates')
+      .maybeSingle();
+
+    if (error || !data) {
+      // system_settings 테이블에 템플릿 데이터가 없는 경우 기본값 반환
+      const defaultTemplates = {
+        'IT운영팀': {
+          default_asset_keyword: 'MacBook',
+          default_saas_names: ['Slack', 'Microsoft 365', 'Jira Software']
+        },
+        '인사팀': {
+          default_asset_keyword: '그램',
+          default_saas_names: ['Slack', 'Microsoft 365', 'Zoom']
+        },
+        '개발1팀': {
+          default_asset_keyword: 'MacBook',
+          default_saas_names: ['Slack', 'Microsoft 365', 'Jira Software']
+        },
+        '디자인팀': {
+          default_asset_keyword: 'MacBook',
+          default_saas_names: ['Slack', 'Figma']
+        }
+      };
+      return NextResponse.json(defaultTemplates);
     }
-    const data = fs.readFileSync(filePath, 'utf-8');
-    return NextResponse.json(JSON.parse(data));
+
+    return NextResponse.json(data.value);
   } catch (err) {
-    console.error('Failed to read templates JSON:', err);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    console.error('Failed to read templates from DB:', err);
+    return NextResponse.json({ error: 'Failed to read templates' }, { status: 500 });
   }
 }
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const filePath = getFilePath();
-    fs.writeFileSync(filePath, JSON.stringify(body, null, 2), 'utf-8');
+    const supabase = await createClient();
+
+    // upsert 수행 (key: department_templates)
+    const { error } = await supabase
+      .from('system_settings')
+      .upsert({
+        key: 'department_templates',
+        value: body,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'key' });
+
+    if (error) {
+      console.error('DB templates save error:', error);
+      return NextResponse.json({ error: 'Failed to save templates to DB' }, { status: 500 });
+    }
+
     return NextResponse.json({ success: true });
   } catch (err) {
-    console.error('Failed to write templates JSON:', err);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    console.error('Failed to save templates:', err);
+    return NextResponse.json({ error: 'Failed to save templates' }, { status: 500 });
   }
 }
+
